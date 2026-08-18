@@ -45,6 +45,9 @@ export const config = {
   // they may bracket a whole night/morning.
   probePollMinutes: num(process.env.PROBE_POLL_MINUTES, 5),
   probeMaxHours: num(process.env.PROBE_MAX_HOURS, 24),
+  // Keep one probe queued for the next not-yet-bookable date automatically,
+  // yielding a nightly release-time measurement with no manual queueing.
+  autoProbe: process.env.AUTO_PROBE === "true",
 
   twoCaptchaApiKey: process.env.TWO_CAPTCHA_API_KEY || "",
   headless: process.env.HEADLESS !== "false",

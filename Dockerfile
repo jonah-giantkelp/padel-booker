@@ -31,8 +31,7 @@ COPY --from=build /app/server/package.json server/
 COPY --from=build /app/server/dist server/dist
 COPY --from=build /app/web/dist web/dist
 
-# Job queue + Chrome profile + artifacts live here — mount a Railway volume at
-# this path so they survive deploys.
-VOLUME /app/data
-
+# Job queue + Chrome profile + artifacts live in /app/data — attach a Railway
+# volume at that mount path so they survive deploys. (No docker VOLUME here;
+# Railway rejects the instruction and manages volumes itself.)
 CMD ["node", "server/dist/index.js"]

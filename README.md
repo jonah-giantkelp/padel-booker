@@ -93,6 +93,11 @@ release, reloads the page every `PROBE_POLL_MINUTES` (default 5) for up to
 flipped from "not available to book yet" to bookable — shown in the job list
 and appended to `data/release-<date>.log`. Then set `RELEASE_TIME=HH:MM`.
 
+Set **`AUTO_PROBE=true`** to skip even the queueing: the scheduler keeps a
+probe job queued for the next not-yet-bookable date, giving one release-time
+measurement per night until you turn it off. Check the job list or
+`data/release-*.log` each morning.
+
 Probes run concurrently with bookings (own Chrome profile), so a long-running
 probe never delays a booking job. An early `RELEASE_TIME` guess is safe —
 booking jobs poll for up to `MAX_WAIT_MINUTES` after firing (raise it if the
@@ -126,6 +131,7 @@ an access layer in front.
 | `MAX_WAIT_MINUTES` | `60` | give up if the day never opens |
 | `PROBE_POLL_MINUTES` | `5` | probe-job reload cadence |
 | `PROBE_MAX_HOURS` | `24` | probe-job give-up deadline |
+| `AUTO_PROBE` | `false` | `true` = keep a nightly release-time probe queued |
 | `BOOKING_WINDOW_DAYS` | `7` | site's advance-booking window |
 | `PORT` | `8080` | injected by Railway |
 | `DATA_DIR` | `./data` | queue + profile + artifacts (Railway volume) |

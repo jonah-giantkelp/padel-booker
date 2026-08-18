@@ -1,10 +1,38 @@
+import { config } from "../config";
 import { log } from "../log";
 import { runProbeJob } from "../booking/probe";
 import { runBookingJob } from "../booking/run";
+import { computeFireAt } from "./schedule";
 import { JobStore } from "./store";
 import { BookingJob } from "./types";
 
 const TICK_MS = 15000;
+
+/** YYYY-MM-DD (local TZ = Europe/London) for the first date outside the booking window. */
+function nextUnreleasedDate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + config.bookingWindowDays + 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * AUTO_PROBE: make sure a probe job exists for the next not-yet-bookable date.
+ * Runs every tick; once that date has a probe (whatever its status), it's a
+ * no-op — so one probe per date, a fresh one appearing each day.
+ */
+async function ensureAutoProbe(store: JobStore): Promise<void> {
+  const date = nextUnreleasedDate();
+  if (store.list().some((j) => j.kind === "probe" && j.date === date)) return;
+  const job = await store.add({
+    kind: "probe",
+    venue: config.venues[0],
+    date,
+    fireAt: computeFireAt(date, config).toISOString(),
+    status: "scheduled"
+  });
+  log(`Auto-probe: queued ${job.id} for ${date} (fires ${job.fireAt})`);
+}
 
 /**
  * Polls the store and executes due jobs (fireAt <= now).
@@ -40,6 +68,10 @@ export function startScheduler(store: JobStore): () => void {
     store.list().filter((j) => j.status === "scheduled" && new Date(j.fireAt) <= new Date());
 
   const tick = async () => {
+    if (config.autoProbe) {
+      await ensureAutoProbe(store).catch((err) => log("Auto-probe error:", err.message));
+    }
+
     // Probes: launch every due one, fire-and-forget.
     for (const probe of due().filter((j) => j.kind === "probe")) {
       if (activeProbes.has(probe.id)) continue;
