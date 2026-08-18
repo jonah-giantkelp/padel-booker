@@ -1,0 +1,20 @@
+{
+  "name": "padel-booker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Queue Tennis Tower Hamlets court bookings and fire them the moment the day is released",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace web && npm run build --workspace server",
+    "start": "npm run start --workspace server",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "test": "npm run test --workspace server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
