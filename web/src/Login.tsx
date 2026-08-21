@@ -13,7 +13,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
     finally { setBusy(false); }
   }
   return <main className="login-page">
-    <div className="login-photo"><img src="/images/padel-hero.jpg" alt="Padel court at golden hour" /><div className="login-caption"><span>COURT/01</span><h1>The court is<br />waiting.</h1><p>Private booking automation for London players.</p></div></div>
+    <div className="login-photo"><img src="/images/padel-hero.jpg" alt="Padel court at golden hour" /><div className="login-caption"><span>Padel Booker</span><h1>The court is<br />waiting.</h1><p>Private booking automation.</p></div></div>
     <form className="login-panel" onSubmit={submit}>
       <div className="login-mark"><i /><i /><i /></div>
       <span className="eyebrow dark">Private access</span>
@@ -23,7 +23,6 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
       <label>Email address<input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
       <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>
       <button type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}<span>→</span></button>
-      <small>Protected with a secure, HTTP-only session.</small>
     </form>
   </main>;
 }

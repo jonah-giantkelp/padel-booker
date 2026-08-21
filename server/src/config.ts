@@ -53,6 +53,8 @@ export const config = {
 
   // After submitting a card, how long to wait for confirmation/3DS to resolve.
   paySettleSeconds: num(process.env.PAY_SETTLE_SECONDS, 180),
+  // How often the background refresher re-checks recently viewed availability.
+  previewRefreshSeconds: num(process.env.PREVIEW_REFRESH_SECONDS, 180),
 
   twoCaptchaApiKey: process.env.TWO_CAPTCHA_API_KEY || "",
   headless: process.env.HEADLESS !== "false",

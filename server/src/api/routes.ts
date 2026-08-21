@@ -180,7 +180,9 @@ export function buildRouter(store: JobStore): Router {
         cardLast4 = card.number.slice(-4);
       }
 
-      const preview = await getAvailabilityPreview(date, venue);
+      // Validate against a fresh-ish check so a slot someone just took is
+      // caught at queue time rather than when the job fires.
+      const preview = await getAvailabilityPreview(date, venue, { maxAgeMs: 60_000 });
       if (preview.released) {
         const available = preview.slots.some((slot) =>
           slot.hour === hour && slot.type === courtType &&

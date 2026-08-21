@@ -120,8 +120,9 @@ The site only says bookings open "up to a week in advance" — measurements so
 far show the whole day drops at once, some time **before 14:00 London**.
 `RELEASE_TIME` defaults to `00:00` (midnight).
 
-To pin it down, queue a **"Find the release time" probe** (or POST
-`{"kind":"probe","date":"<8+ days out>"}`). It fires just before the assumed
+To pin it down, queue a probe via the API — POST
+`{"kind":"probe","date":"<8+ days out>"}` — or set `AUTO_PROBE=true` (the web
+UI no longer exposes probes, but the backend fully supports them). It fires just before the assumed
 release, reloads the page every `PROBE_POLL_MINUTES` (default 5) for up to
 `PROBE_MAX_HOURS` (default 24), and records the window in which the date
 flipped from "not available to book yet" to bookable — shown in the job list

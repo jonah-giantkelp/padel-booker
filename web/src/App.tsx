@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, AppConfig, AvailabilityPreview, BookingJob, CourtType, JobKind, NewJob, StopAt } from "./api";
+import { api, AppConfig, AvailabilityPreview, BookingJob, CourtType, NewJob, StopAt } from "./api";
 
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 7);
 const hourLabel = (h: number) => (h < 12 ? `${h}:00` : h === 12 ? "12:00" : `${h - 12}:00`);
@@ -26,7 +26,6 @@ export default function App() {
   const [availability, setAvailability] = useState<AvailabilityPreview | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [form, setForm] = useState({
-    kind: "booking" as JobKind,
     venue: "bethnal-green-gardens",
     date: isoDate(new Date()),
     hour: "19",
@@ -47,7 +46,9 @@ export default function App() {
   });
   const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
-  const days = useMemo(() => Array.from({ length: (config?.bookingWindowDays ?? 7) + 1 }, (_, i) => {
+  // Show two weeks: the released window plus a week beyond it — booking dates
+  // before they're released is the whole point, the job fires at release time.
+  const days = useMemo(() => Array.from({ length: (config?.bookingWindowDays ?? 7) + 8 }, (_, i) => {
     const date = new Date();
     date.setHours(12, 0, 0, 0);
     date.setDate(date.getDate() + i);
@@ -86,39 +87,35 @@ export default function App() {
     e.preventDefault();
     setError(null);
     setNotice(null);
-    if (form.kind === "booking" && (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender)) {
+    if (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender) {
       setShowDetails(true);
       setError("Add your player details to finish setting up this booking.");
       return;
     }
-    if (form.kind === "booking" && form.stopAt === "paid" &&
+    if (form.stopAt === "paid" &&
         (!form.cardNumber || !form.cardExpiry || !form.cardCvc || !form.cardName || !form.cardPostcode)) {
       setError("Auto-pay needs the full card details (number, expiry, CVC, name, postcode).");
       return;
     }
     setSubmitting(true);
     try {
-      const payload: NewJob = form.kind === "probe"
-        ? { kind: "probe", venue: form.venue, date: form.date }
-        : {
-            kind: "booking", venue: form.venue, date: form.date, time: form.hour,
-            courtType: form.courtType, courtNumber: form.courtNumber || undefined,
-            stopAt: form.stopAt,
-            details: {
-              fullName: form.fullName, email: form.email, mobile: form.mobile,
-              otherTel: form.otherTel || undefined, dob: form.dob,
-              gender: form.gender as "f" | "m" | "n"
-            },
-            card: form.stopAt === "paid" ? {
-              number: form.cardNumber, expiry: form.cardExpiry, cvc: form.cardCvc,
-              name: form.cardName, postcode: form.cardPostcode
-            } : undefined
-          };
+      const payload: NewJob = {
+        kind: "booking", venue: form.venue, date: form.date, time: form.hour,
+        courtType: form.courtType, courtNumber: form.courtNumber || undefined,
+        stopAt: form.stopAt,
+        details: {
+          fullName: form.fullName, email: form.email, mobile: form.mobile,
+          otherTel: form.otherTel || undefined, dob: form.dob,
+          gender: form.gender as "f" | "m" | "n"
+        },
+        card: form.stopAt === "paid" ? {
+          number: form.cardNumber, expiry: form.cardExpiry, cvc: form.cardCvc,
+          name: form.cardName, postcode: form.cardPostcode
+        } : undefined
+      };
       const created = await api.createJob(payload);
       if (form.stopAt === "paid") set({ cardNumber: "", cardExpiry: "", cardCvc: "" });
-      setNotice(form.kind === "probe"
-        ? `Release watch set for ${form.date}.`
-        : `You're set. We'll start at ${fmt(created.fireAt)} and ${form.stopAt === "paid" ? "pay automatically" : "take it to payment"}.`);
+      setNotice(`You're set. We'll start at ${fmt(created.fireAt)} and ${form.stopAt === "paid" ? "pay automatically" : "take it to payment"}.`);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -138,21 +135,9 @@ export default function App() {
   return (
     <div className="app-shell">
       <nav className="topbar">
-        <a className="brand" href="#top"><Mark /><span>COURT/01</span></a>
-        <div className="nav-meta"><span>London courts</span><b>{jobs.filter((j) => j.status === "scheduled").length} upcoming</b><button onClick={() => api.logout().then(() => location.reload())}>Sign out</button></div>
+        <a className="brand" href="#booking"><Mark /><span>Padel Booker</span></a>
+        <div className="nav-meta"><b>{jobs.filter((j) => j.status === "scheduled").length} upcoming</b><button onClick={() => api.logout().then(() => location.reload())}>Sign out</button></div>
       </nav>
-
-      <header className="hero" id="top">
-        <img src="/images/padel-hero.jpg" alt="Padel players on an outdoor London court" />
-        <div className="hero-shade" />
-        <div className="hero-copy">
-          <span className="eyebrow">Play more · queue less</span>
-          <h1>Your next court,<br /><em>already handled.</em></h1>
-          <p>Choose the moment. We watch the release and get everything ready through to payment.</p>
-          <a className="hero-link" href="#booking">Find a court <span>↘</span></a>
-        </div>
-        <div className="hero-index"><span>51.5272° N</span><span>East London</span></div>
-      </header>
 
       <main id="booking">
         {error && <div className="toast error">{error}<button onClick={() => setError(null)}>×</button></div>}
@@ -162,10 +147,6 @@ export default function App() {
           <div className="section-heading">
             <span className="step">01</span>
             <div><span className="eyebrow dark">Build your session</span><h2>When are we playing?</h2></div>
-            <div className="mode-switch" aria-label="Job type">
-              <button type="button" className={form.kind === "booking" ? "active" : ""} onClick={() => set({ kind: "booking" })}>Book</button>
-              <button type="button" className={form.kind === "probe" ? "active" : ""} onClick={() => set({ kind: "probe" })}>Watch release</button>
-            </div>
           </div>
 
           <div className="venue-line">
@@ -173,10 +154,10 @@ export default function App() {
             <label><span>Venue</span><select value={form.venue} onChange={(e) => set({ venue: e.target.value })}>
               {(config?.venues ?? [form.venue]).map((venue) => <option key={venue} value={venue}>{venueLabel(venue)}</option>)}
             </select></label>
-            {form.kind === "booking" && <div className="sport-pills">
+            <div className="sport-pills">
               <button type="button" className={form.courtType === "padel" ? "active" : ""} onClick={() => set({ courtType: "padel" })}>Padel</button>
               <button type="button" className={form.courtType === "tennis" ? "active" : ""} onClick={() => set({ courtType: "tennis" })}>Tennis</button>
-            </div>}
+            </div>
           </div>
 
           <div className="calendar-block">
@@ -193,20 +174,20 @@ export default function App() {
             </div>
           </div>
 
-          {form.kind === "booking" ? <div className="time-block">
+          <div className="time-block">
             <div className="calendar-label"><span className="field-number">C</span><span>Start time</span><strong>{availabilityLoading ? "Checking live availability…" : availability?.released ? `${availableHours.size} times available` : "Not released · choose a preferred time"}</strong></div>
             <div className="time-grid">
               {HOURS.map((hour) => {
-                const unavailable = availabilityLoading || (!!availability?.released && !availableHours.has(hour));
+                const unavailable = !!availability?.released && !availableHours.has(hour);
                 return <button type="button" key={hour} disabled={unavailable} className={`${form.hour === String(hour) ? "selected" : ""} ${unavailable ? "unavailable" : ""}`} onClick={() => set({ hour: String(hour) })}>
                 {hourLabel(hour)}<small>{hour < 12 ? "AM" : "PM"}</small>
                 </button>;
               })}
             </div>
             {!availabilityLoading && availability?.released && availableHours.size === 0 && <p className="no-slots">No {form.courtType} courts remain for this date. Choose another day.</p>}
-          </div> : <div className="probe-note"><b>Release watch</b><p>We’ll monitor this date and record the moment courts become bookable.</p></div>}
+          </div>
 
-          {form.kind === "booking" && <div className="checkout-band">
+          <div className="checkout-band">
             <div className="photo-tile"><img src="/images/padel-racket.jpg" alt="Padel racket and ball beside the court glass" /></div>
             <div className="player-panel">
               <span className="eyebrow dark">Player profile</span>
@@ -220,9 +201,9 @@ export default function App() {
               <b>{hourLabel(Number(form.hour))} {Number(form.hour) < 12 ? "AM" : "PM"}</b>
               <small>{venueLabel(form.venue)}</small>
             </div>
-          </div>}
+          </div>
 
-          {form.kind === "booking" && <div className="details-drawer">
+          <div className="details-drawer">
             <div className="drawer-title"><span>Payment</span><p>Choose whether we hand over at the payment page or pay for you.</p></div>
             <div className="mode-switch" aria-label="Automation level">
               <button type="button" className={form.stopAt !== "paid" ? "active" : ""} onClick={() => set({ stopAt: "payment" })}>Stop at payment</button>
@@ -238,9 +219,9 @@ export default function App() {
               </div>
               <p className="card-note">Encrypted at rest, used once for this booking, deleted after it succeeds. If the bank demands a 3DS check the job fails with the challenge screenshotted — a purchase on this card earlier the same evening makes that much less likely.</p>
             </>}
-          </div>}
+          </div>
 
-          {form.kind === "booking" && showDetails && <div className="details-drawer">
+          {showDetails && <div className="details-drawer">
             <div className="drawer-title"><span>Player details</span><p>Required by the venue.</p></div>
             <div className="details-grid">
               <label>Full name<input required value={form.fullName} onChange={(e) => set({ fullName: e.target.value })} /></label>
@@ -253,8 +234,8 @@ export default function App() {
           </div>}
 
           <div className="submit-row">
-            <div><span>Automation</span><strong>{form.kind === "probe" ? "Watch and report" : form.stopAt === "paid" ? "Book and pay automatically" : "Stop safely at payment"}</strong></div>
-            <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : form.kind === "probe" ? "Watch this date" : "Queue this court"}<span>↗</span></button>
+            <div><span>Automation</span><strong>{form.stopAt === "paid" ? "Book and pay automatically" : "Stop safely at payment"}</strong></div>
+            <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : "Queue this court"}<span>↗</span></button>
           </div>
         </form>
 
@@ -265,8 +246,6 @@ export default function App() {
           </div>}
         </section>
       </main>
-
-      <footer><div className="brand"><Mark /><span>COURT/01</span></div><p>Less refreshing. More playing.</p><span>Built for London courts · {new Date().getFullYear()}</span></footer>
     </div>
   );
 }

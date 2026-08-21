@@ -3,6 +3,7 @@ import { config, jobsFile } from "./config";
 import path from "node:path";
 import express, { NextFunction, Request, Response } from "express";
 import { buildRouter } from "./api/routes";
+import { startPreviewRefresher } from "./booking/preview";
 import { startScheduler } from "./jobs/scheduler";
 import { JobStore } from "./jobs/store";
 import { log } from "./log";
@@ -38,9 +39,11 @@ async function main(): Promise<void> {
   });
 
   const stop = startScheduler(store);
+  const stopRefresher = startPreviewRefresher();
   const shutdown = (signal: string) => {
     log(`🛑 ${signal} — shutting down`);
     stop();
+    stopRefresher();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();
   };
