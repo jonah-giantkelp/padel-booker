@@ -49,6 +49,7 @@ export interface BookingJob {
   courtNumber?: number;
   details?: BookingDetails;
   stopAt?: StopAt;
+  ownerName?: string;
   cardLast4?: string;
   fireAt: string;
   status: JobStatus;
@@ -70,6 +71,7 @@ export interface AvailabilityPreview {
   date: string;
   venue: string;
   released: boolean;
+  scheduled: boolean;
   checkedAt: string;
   slots: Array<{ hour: number; type: CourtType; court: string; price: string | null }>;
 }

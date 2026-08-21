@@ -118,17 +118,22 @@ export default function App() {
     e.preventDefault();
     setError(null);
     setNotice(null);
-    if (!form.date || !form.hour) {
-      setError("Pick a day and a start time first.");
-      return;
-    }
-    if (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender) {
-      setShowDetails(true);
-      setError("Add your player details to finish setting up this booking.");
-      return;
-    }
-    if (!form.cardNumber || !form.cardExpiry || !form.cardCvc || !form.cardName || !form.cardPostcode) {
-      setError("Add the card details (number, expiry, CVC, name, postcode) — bookings are paid automatically.");
+    const missing: string[] = [];
+    if (!form.date) missing.push("a day");
+    if (!form.hour) missing.push("a start time");
+    if (!form.fullName) missing.push("full name");
+    if (!form.email) missing.push("email");
+    if (!form.mobile) missing.push("mobile");
+    if (!form.dob) missing.push("date of birth");
+    if (!form.gender) missing.push("gender");
+    if (!form.cardNumber) missing.push("card number");
+    if (!form.cardExpiry) missing.push("card expiry");
+    if (!form.cardCvc) missing.push("card CVC");
+    if (!form.cardName) missing.push("name on card");
+    if (!form.cardPostcode) missing.push("billing postcode");
+    if (missing.length) {
+      if (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender) setShowDetails(true);
+      setError(`Before this booking can be queued, add: ${missing.join(", ")}.`);
       return;
     }
     setSubmitting(true);
@@ -180,12 +185,10 @@ export default function App() {
 
         <form className="booking-studio" onSubmit={submit}>
           <div className="section-heading">
-            <span className="step">01</span>
-            <div><span className="eyebrow dark">Build your session</span><h2>When are we playing?</h2></div>
+            <div><h2>Build your session</h2></div>
           </div>
 
           <div className="venue-line">
-            <span className="field-number">A</span>
             <label><span>Venue</span><select value={form.venue} onChange={(e) => set({ venue: e.target.value })}>
               {(config?.venues ?? [form.venue]).map((venue) => <option key={venue} value={venue}>{venueLabel(venue)}</option>)}
             </select></label>
@@ -197,7 +200,7 @@ export default function App() {
 
           <div className="calendar-block">
             <div className="calendar-label">
-              <span className="field-number">B</span><span>Select a day</span>
+              <span>Select a day</span>
               <div className="week-nav">
                 <strong>{visibleWeekStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</strong>
                 <button type="button" aria-label="Previous week" disabled={weekOffset === 0} onClick={() => setWeekOffset((w) => Math.max(0, w - 1))}>←</button>
@@ -222,8 +225,13 @@ export default function App() {
             </div>
           </div>
 
-          <div className="time-block">
-            <div className="calendar-label"><span className="field-number">C</span><span>Start time</span><strong>{availabilityLoading ? "Checking live availability…" : availability?.released ? `${availableHours.size} times available` : "Not released · choose a preferred time"}</strong></div>
+          {form.date && <div className="time-block">
+            <div className="calendar-label"><span>Start time</span><strong>{
+              availabilityLoading ? "Checking live availability…"
+                : availability?.released ? `${availableHours.size} times available`
+                : availability?.scheduled ? "Not released yet · choose a preferred time"
+                : "Couldn't read live availability · choose a preferred time"
+            }</strong></div>
             <div className="time-grid">
               {HOURS.map((hour) => {
                 const unavailable = !!availability?.released && !availableHours.has(hour);
@@ -233,7 +241,7 @@ export default function App() {
               })}
             </div>
             {!availabilityLoading && availability?.released && availableHours.size === 0 && <p className="no-slots">No {form.courtType} courts remain for this date. Choose another day.</p>}
-          </div>
+          </div>}
 
           <div className="checkout-band">
             <div className="photo-tile"><img src="/images/padel-racket.jpg" alt="Padel racket and ball beside the court glass" /></div>
@@ -241,6 +249,7 @@ export default function App() {
               <span className="eyebrow dark">Player profile</span>
               <h3>{profileSaved ? form.fullName : "Add your details once"}</h3>
               <p>{profileSaved ? `${form.email} · ${form.mobile}` : "We use these to complete the venue checkout."}</p>
+              {!profileSaved && <small className="required-hint">ⓘ The venue requires these to book a court — save them before queueing.</small>}
               <button type="button" className="text-action" onClick={() => setShowDetails((open) => !open)}>{showDetails ? "Close details" : profileSaved ? "Edit profile" : "Add player details"} <span>→</span></button>
             </div>
             <div className="booking-summary">
@@ -279,17 +288,16 @@ export default function App() {
           </div>
 
           <div className="submit-row">
-            <div><span>Automation</span><strong>Book and pay automatically</strong></div>
             <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : "Queue this court"}<span>↗</span></button>
           </div>
         </form>
 
-        <section className="journey-section">
-          <div className="section-heading compact"><span className="step">02</span><div><span className="eyebrow dark">Your court diary</span><h2>Upcoming &amp; recent</h2></div></div>
-          {jobs.length === 0 ? <div className="empty-journey"><p>No sessions queued yet.</p><span>Your next court will appear here.</span></div> : <div className="journey-list">
+        {jobs.length > 0 && <section className="journey-section">
+          <div className="section-heading compact"><div><span className="eyebrow dark">Court diary</span><h2>Upcoming &amp; recent</h2></div></div>
+          <div className="journey-list">
             {jobs.map((job) => <JobCard key={job.id} job={job} onRun={() => act(() => api.runNow(job.id))} onDelete={() => act(() => api.deleteJob(job.id))} />)}
-          </div>}
-        </section>
+          </div>
+        </section>}
       </main>
     </div>
   );
@@ -303,7 +311,7 @@ function JobCard({ job, onRun, onDelete }: { job: BookingJob; onRun: () => void;
   const date = new Date(`${job.date}T12:00:00`);
   return <article className="journey-card">
     <div className="date-stamp"><span>{date.toLocaleDateString("en-GB", { month: "short" })}</span><b>{date.getDate()}</b></div>
-    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · ${
+    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}{job.ownerName ? ` · ${job.ownerName}` : ""}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · ${
       job.result.stageReached === "paid" ? `paid with card ····${job.cardLast4 || ""}` :
       job.result.stageReached === "card" ? "card form captured" : "payment page ready"
     }` : job.error || `Starts ${fmt(job.fireAt)}`}</p></div>

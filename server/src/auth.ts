@@ -44,18 +44,26 @@ function createSession(email: string): string {
   return `${payload}.${sign(payload)}`;
 }
 
-function authenticated(req: Request): boolean {
+/** The validated session email, or null if the request isn't authenticated. */
+export function sessionEmail(req: Request): string | null {
   const token = readCookie(req);
-  if (!token || !config.sessionSecret) return false;
+  if (!token || !config.sessionSecret) return null;
   const dot = token.lastIndexOf(".");
-  if (dot < 0) return false;
+  if (dot < 0) return null;
   const payload = token.slice(0, dot);
   const supplied = Buffer.from(token.slice(dot + 1));
   const expected = Buffer.from(sign(payload));
-  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return false;
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return isKnownEmail(String(data.email).toLowerCase()) && Number(data.exp) > Date.now();
+    const email = String(data.email).toLowerCase();
+    return isKnownEmail(email) && Number(data.exp) > Date.now() ? email : null;
+  } catch { return null; }
+}
+
+function authenticated(req: Request): boolean {
+  try {
+    return sessionEmail(req) !== null;
   } catch { return false; }
 }
 
@@ -110,6 +118,10 @@ export function authRouter(): Router {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (authenticated(req)) return next();
+  const email = sessionEmail(req);
+  if (email) {
+    res.locals.email = email;
+    return next();
+  }
   res.status(401).json({ error: "Authentication required" });
 }

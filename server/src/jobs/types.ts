@@ -76,6 +76,10 @@ export interface BookingJob {
   courtNumber?: number;
   details?: BookingDetails;
   stopAt?: StopAt;
+  /** authenticated account that queued this job (email) */
+  owner?: string;
+  /** display label for the diary: saved player name, else the owner email */
+  ownerName?: string;
   /** AES-256-GCM blob of CardDetails (stopAt "paid" only); cleared on success */
   cardEnc?: string;
   /** kept for display after cardEnc is scrubbed */

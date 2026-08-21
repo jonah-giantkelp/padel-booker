@@ -85,9 +85,10 @@ function parseCard(body: Record<string, unknown>): CardDetails {
   return { number, expMonth, expYear, cvc, name, postcode };
 }
 
-/** Never let the encrypted card blob out through the API. */
-function publicJob(job: BookingJob): Omit<BookingJob, "cardEnc"> {
-  const { cardEnc: _cardEnc, ...rest } = job;
+/** Strip secrets/PII the client shouldn't see: the encrypted card blob and the
+ * raw account email (the diary shows ownerName, not the login address). */
+function publicJob(job: BookingJob): Omit<BookingJob, "cardEnc" | "owner"> {
+  const { cardEnc: _cardEnc, owner: _owner, ...rest } = job;
   return rest;
 }
 
@@ -135,14 +136,17 @@ export function buildRouter(store: JobStore): Router {
 
       // A probe only needs a venue and a date to watch.
       if (kind === "probe") {
+        const owner = typeof res.locals.email === "string" ? res.locals.email : undefined;
         const job = await store.add({
           kind,
           venue,
           date,
+          owner,
+          ownerName: owner,
           fireAt: fireAt.toISOString(),
           status: "scheduled"
         });
-        return res.status(201).json(job);
+        return res.status(201).json(publicJob(job));
       }
 
       const hour = parseHour(String(body.time ?? ""));
@@ -166,6 +170,25 @@ export function buildRouter(store: JobStore): Router {
       if (!STOP_ATS.includes(stopAt)) throw badRequest("stopAt must be basket, details or payment");
 
       const details = parseDetails(body);
+
+      // No two active jobs may target the same court slot — one court can't be
+      // held by two people. A specific court number must match exactly; an
+      // "any court" request collides with another "any court" request for the
+      // same type/hour (both would grab whatever's free and race each other).
+      const clash = store.list().find((j) =>
+        j.kind === "booking" &&
+        (j.status === "scheduled" || j.status === "running" || j.status === "success") &&
+        j.venue === venue && j.date === date && j.hour === hour && j.courtType === courtType &&
+        (j.courtNumber ?? null) === (courtNumber ?? null)
+      );
+      if (clash) {
+        const who = clash.ownerName || clash.owner || "someone";
+        const err = badRequest(
+          `That court is already queued by ${who}. Pick a different time or court number.`
+        );
+        err.status = 409;
+        throw err;
+      }
 
       let cardEnc: string | undefined;
       let cardLast4: string | undefined;
@@ -195,6 +218,7 @@ export function buildRouter(store: JobStore): Router {
         }
       }
 
+      const owner = typeof res.locals.email === "string" ? res.locals.email : undefined;
       const job = await store.add({
         kind,
         venue,
@@ -204,6 +228,8 @@ export function buildRouter(store: JobStore): Router {
         courtNumber,
         details,
         stopAt,
+        owner,
+        ownerName: details.fullName || owner,
         cardEnc,
         cardLast4,
         fireAt: fireAt.toISOString(),

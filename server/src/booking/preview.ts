@@ -10,6 +10,10 @@ export interface AvailabilityPreview {
   date: string;
   venue: string;
   released: boolean;
+  /** true = the date's release moment is still in the future (no data exists
+   * yet, so !released is expected). false + !released = a live check ran but
+   * found no availability table (site closed, or gate/scrape failed). */
+  scheduled: boolean;
   checkedAt: string;
   slots: Array<{ hour: number; type: CourtType; court: string; price: string | null }>;
 }
@@ -43,7 +47,12 @@ function refresh(date: string, venue: string): Promise<AvailabilityPreview> {
     .catch(() => {})
     .then(() => loadPreview(date, venue))
     .then((value) => {
-      cache.set(key, { checkedAtMs: Date.now(), value });
+      // Only cache a confident answer: a released read (real data) or a
+      // scheduled/future date (won't change until release). A live check that
+      // came back with no table is treated as a soft failure and NOT cached,
+      // so the next view retries rather than showing a stale "unavailable" for
+      // a day.
+      if (value.released || value.scheduled) cache.set(key, { checkedAtMs: Date.now(), value });
       return value;
     })
     .finally(() => pending.delete(key));
@@ -102,14 +111,16 @@ async function loadPreview(date: string, venue: string): Promise<AvailabilityPre
   // A future release needs no browser check: its exact availability does not
   // exist yet, so the UI allows choosing a desired time and queues the job.
   if (computeFireAt(date, config).getTime() > Date.now() + 1000) {
-    return { date, venue, released: false, checkedAt, slots: [] };
+    return { date, venue, released: false, scheduled: true, checkedAt, slots: [] };
   }
 
   const url = `${config.baseUrl}/book/courts/${venue}/${date}`;
   const { browser, page } = await launchBrowser(previewProfileDir());
   try {
     await gotoThroughGate(page, url);
-    if (!(await hasAvailabilityTable(page))) return { date, venue, released: false, checkedAt, slots: [] };
+    if (!(await hasAvailabilityTable(page))) {
+      return { date, venue, released: false, scheduled: false, checkedAt, slots: [] };
+    }
     const availability = await extractSlots(page);
     const slots: AvailabilityPreview["slots"] = [];
     for (const slot of availability.slots) {
@@ -119,7 +130,7 @@ async function loadPreview(date: string, venue: string): Promise<AvailabilityPre
       const type: CourtType | null = matchesCourt(slot, "padel") ? "padel" : matchesCourt(slot, "tennis") ? "tennis" : null;
       if (type) slots.push({ hour, type, court: slot.court, price: slot.price });
     }
-    return { date, venue, released: true, checkedAt, slots };
+    return { date, venue, released: true, scheduled: false, checkedAt, slots };
   } finally {
     await browser.close();
   }
