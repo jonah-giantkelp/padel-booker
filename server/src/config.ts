@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 
 // Repo-root .env (works from both src/ via tsx and dist/ via node).
 dotenv.config({ path: path.join(__dirname, "..", "..", ".env") });
+dotenv.config({ path: path.join(__dirname, "..", "..", ".env.auth") });
 
 const num = (v: string | undefined, fallback: number) => {
   const n = v === undefined ? NaN : Number(v);
@@ -14,6 +15,7 @@ const num = (v: string | undefined, fallback: number) => {
 };
 
 export const config = {
+  nodeEnv: process.env.NODE_ENV || "development",
   port: num(process.env.PORT, 8080),
   dataDir: process.env.DATA_DIR || path.join(__dirname, "..", "..", "data"),
 
@@ -51,11 +53,15 @@ export const config = {
 
   twoCaptchaApiKey: process.env.TWO_CAPTCHA_API_KEY || "",
   headless: process.env.HEADLESS !== "false",
-  puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+  puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+  authEmail: process.env.AUTH_EMAIL || "",
+  authPasswordHash: process.env.AUTH_PASSWORD_HASH || "",
+  sessionSecret: process.env.SESSION_SECRET || ""
 };
 
 export const jobsFile = () => path.join(config.dataDir, "jobs.json");
 export const profileDir = () => path.join(config.dataDir, "profile");
+export const previewProfileDir = () => path.join(config.dataDir, "profile-preview");
 export const artifactsDir = (jobId: string) => path.join(config.dataDir, "artifacts", jobId);
 // Probes run concurrently with bookings, so each gets its own Chrome profile.
 export const probeProfileDir = (jobId: string) => path.join(config.dataDir, "profile-probe", jobId);

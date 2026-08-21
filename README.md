@@ -43,6 +43,11 @@ npm run dev:server            # API + scheduler on :8080
 npm run dev:web               # Vite dev server on :5173 (proxies /api)
 ```
 
+The app is login-gated. Configure `AUTH_EMAIL`, a salted scrypt
+`AUTH_PASSWORD_HASH` (`<salt-hex>:<hash-hex>`), and a random `SESSION_SECRET`
+in an ignored `.env.auth` file locally, and as deployment variables in Railway.
+All booking and artifact API routes require a signed, HTTP-only session cookie.
+
 On macOS also set in `.env` (the Puppeteer-bundled Chrome can download broken):
 
 ```
@@ -137,6 +142,9 @@ an access layer in front.
 | `DATA_DIR` | `./data` | queue + profile + artifacts (Railway volume) |
 | `HEADLESS` | `true` | `false` to watch the browser locally |
 | `PUPPETEER_EXECUTABLE_PATH` | – | Chrome binary (set in Docker; needed on macOS) |
+| `AUTH_EMAIL` | – | the single account allowed to sign in |
+| `AUTH_PASSWORD_HASH` | – | salted scrypt hash; never store the plaintext password |
+| `SESSION_SECRET` | – | random secret used to sign HTTP-only sessions |
 
 ## Repo layout
 

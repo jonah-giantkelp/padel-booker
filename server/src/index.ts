@@ -6,14 +6,17 @@ import { buildRouter } from "./api/routes";
 import { startScheduler } from "./jobs/scheduler";
 import { JobStore } from "./jobs/store";
 import { log } from "./log";
+import { assertAuthConfigured, authRouter, requireAuth } from "./auth";
 
 async function main(): Promise<void> {
+  assertAuthConfigured();
   const store = new JobStore(jobsFile());
   await store.init();
 
   const app = express();
   app.use(express.json());
-  app.use("/api", buildRouter(store));
+  app.use("/api/auth", authRouter());
+  app.use("/api", requireAuth, buildRouter(store));
 
   // Built React app (web/dist), with an SPA fallback for non-API routes.
   const webDist = path.join(__dirname, "..", "..", "web", "dist");

@@ -6,6 +6,7 @@ import { parseHour } from "../booking/availability";
 import { computeFireAt } from "../jobs/schedule";
 import { JobStore } from "../jobs/store";
 import { BookingDetails, CourtType, JobKind, StopAt } from "../jobs/types";
+import { getAvailabilityPreview } from "../booking/preview";
 
 const COURT_TYPES: CourtType[] = ["padel", "tennis"];
 const STOP_ATS: StopAt[] = ["basket", "details", "payment"];
@@ -61,6 +62,16 @@ export function buildRouter(store: JobStore): Router {
     res.json(store.list());
   });
 
+  router.get("/availability", async (req, res, next) => {
+    try {
+      const date = typeof req.query.date === "string" ? req.query.date : "";
+      const venue = typeof req.query.venue === "string" ? req.query.venue : config.venues[0];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw badRequest("date must be YYYY-MM-DD");
+      if (!config.venues.includes(venue)) throw badRequest("unknown venue");
+      res.json(await getAvailabilityPreview(date, venue));
+    } catch (err) { next(err); }
+  });
+
   router.post("/jobs", async (req, res, next) => {
     try {
       const body = (req.body || {}) as Record<string, unknown>;
@@ -109,6 +120,19 @@ export function buildRouter(store: JobStore): Router {
       if (!STOP_ATS.includes(stopAt)) throw badRequest("stopAt must be basket, details or payment");
 
       const details = parseDetails(body);
+
+      const preview = await getAvailabilityPreview(date, venue);
+      if (preview.released) {
+        const available = preview.slots.some((slot) =>
+          slot.hour === hour && slot.type === courtType &&
+          (courtNumber === undefined || slot.court.toLowerCase() === `${courtType} court ${courtNumber}`)
+        );
+        if (!available) {
+          const err = badRequest("That slot is no longer available. Refresh the calendar and choose another time.");
+          err.status = 409;
+          throw err;
+        }
+      }
 
       const job = await store.add({
         kind,

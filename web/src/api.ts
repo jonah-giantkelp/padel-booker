@@ -56,6 +56,14 @@ export interface AppConfig {
   timezone: string;
 }
 
+export interface AvailabilityPreview {
+  date: string;
+  venue: string;
+  released: boolean;
+  checkedAt: string;
+  slots: Array<{ hour: number; type: CourtType; court: string; price: string | null }>;
+}
+
 export interface NewJob {
   kind: JobKind;
   venue: string;
@@ -76,7 +84,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<{ authenticated: boolean }>("/api/auth/status"),
+  login: (email: string, password: string) => request<{ authenticated: boolean }>("/api/auth/login", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password })
+  }),
+  logout: () => request<void>("/api/auth/logout", { method: "POST" }),
   config: () => request<AppConfig>("/api/config"),
+  availability: (date: string, venue: string) => request<AvailabilityPreview>(
+    `/api/availability?date=${encodeURIComponent(date)}&venue=${encodeURIComponent(venue)}`
+  ),
   jobs: () => request<BookingJob[]>("/api/jobs"),
   createJob: (job: NewJob) =>
     request<BookingJob>("/api/jobs", {

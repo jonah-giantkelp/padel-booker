@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, AppConfig, BookingJob, CourtType, JobKind, NewJob, StopAt } from "./api";
+import { api, AppConfig, AvailabilityPreview, BookingJob, CourtType, JobKind, NewJob, StopAt } from "./api";
 
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 7);
 const hourLabel = (h: number) => (h < 12 ? `${h}:00` : h === 12 ? "12:00" : `${h - 12}:00`);
@@ -23,6 +23,8 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [availability, setAvailability] = useState<AvailabilityPreview | null>(null);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [form, setForm] = useState({
     kind: "booking" as JobKind,
     venue: "bethnal-green-gardens",
@@ -54,6 +56,26 @@ export default function App() {
     const timer = setInterval(refresh, 10000);
     return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAvailabilityLoading(true);
+    setAvailability(null);
+    api.availability(form.date, form.venue)
+      .then((result) => { if (!cancelled) setAvailability(result); })
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setAvailabilityLoading(false); });
+    return () => { cancelled = true; };
+  }, [form.date, form.venue]);
+
+  const availableHours = useMemo(() => new Set(
+    availability?.slots.filter((slot) => slot.type === form.courtType).map((slot) => slot.hour) || []
+  ), [availability, form.courtType]);
+  useEffect(() => {
+    if (!availability?.released || availableHours.has(Number(form.hour))) return;
+    const first = [...availableHours].sort((a, b) => a - b)[0];
+    if (first !== undefined) set({ hour: String(first) });
+  }, [availability, availableHours, form.hour]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -102,7 +124,7 @@ export default function App() {
     <div className="app-shell">
       <nav className="topbar">
         <a className="brand" href="#top"><Mark /><span>COURT/01</span></a>
-        <div className="nav-meta"><span>London courts</span><b>{jobs.filter((j) => j.status === "scheduled").length} upcoming</b></div>
+        <div className="nav-meta"><span>London courts</span><b>{jobs.filter((j) => j.status === "scheduled").length} upcoming</b><button onClick={() => api.logout().then(() => location.reload())}>Sign out</button></div>
       </nav>
 
       <header className="hero" id="top">
@@ -157,12 +179,16 @@ export default function App() {
           </div>
 
           {form.kind === "booking" ? <div className="time-block">
-            <div className="calendar-label"><span className="field-number">C</span><span>Start time</span><strong>60 min session</strong></div>
+            <div className="calendar-label"><span className="field-number">C</span><span>Start time</span><strong>{availabilityLoading ? "Checking live availability…" : availability?.released ? `${availableHours.size} times available` : "Not released · choose a preferred time"}</strong></div>
             <div className="time-grid">
-              {HOURS.map((hour) => <button type="button" key={hour} className={form.hour === String(hour) ? "selected" : ""} onClick={() => set({ hour: String(hour) })}>
+              {HOURS.map((hour) => {
+                const unavailable = availabilityLoading || (!!availability?.released && !availableHours.has(hour));
+                return <button type="button" key={hour} disabled={unavailable} className={`${form.hour === String(hour) ? "selected" : ""} ${unavailable ? "unavailable" : ""}`} onClick={() => set({ hour: String(hour) })}>
                 {hourLabel(hour)}<small>{hour < 12 ? "AM" : "PM"}</small>
-              </button>)}
+                </button>;
+              })}
             </div>
+            {!availabilityLoading && availability?.released && availableHours.size === 0 && <p className="no-slots">No {form.courtType} courts remain for this date. Choose another day.</p>}
           </div> : <div className="probe-note"><b>Release watch</b><p>We’ll monitor this date and record the moment courts become bookable.</p></div>}
 
           {form.kind === "booking" && <div className="checkout-band">
