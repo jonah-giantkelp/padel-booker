@@ -1,6 +1,6 @@
 export type CourtType = "padel" | "tennis";
 export type JobStatus = "scheduled" | "running" | "success" | "failed";
-export type StopAt = "basket" | "details" | "checkout";
+export type StopAt = "basket" | "details" | "payment";
 export type JobKind = "booking" | "probe";
 
 export interface BookingDetails {
@@ -8,8 +8,8 @@ export interface BookingDetails {
   email: string;
   mobile: string;
   otherTel?: string;
-  dob?: string;
-  gender?: "f" | "m" | "n";
+  dob: string;
+  gender: "f" | "m" | "n";
 }
 
 export interface JobResult {

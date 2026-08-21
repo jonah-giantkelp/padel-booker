@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "test": "node --import tsx --test src/booking/availability.test.ts src/jobs/schedule.test.ts",
+    "test": "node --import tsx --test src/booking/availability.test.ts src/booking/run.test.ts src/jobs/schedule.test.ts",
     "cli:book": "tsx src/cli/book.ts",
     "cli:probe-release": "tsx src/cli/probe-release.ts"
   },

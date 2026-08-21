@@ -46,6 +46,10 @@ async function main(): Promise<void> {
       if (await hasAvailabilityTable(page)) {
         const data = await extractSlots(page);
         await line(`OPEN — ${date} is bookable: ${data.availableCount}/${data.slotCount} slots available`);
+        const available = data.slots
+          .filter((slot) => slot.available)
+          .map((slot) => `${slot.time} ${slot.court} ${slot.price || ""}`.trim());
+        await line(`Available slots: ${available.join("; ") || "none"}`);
         await line("Release time is between the previous line and this one. Set RELEASE_TIME in .env.");
         return;
       }

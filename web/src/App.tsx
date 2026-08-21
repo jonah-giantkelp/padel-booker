@@ -1,31 +1,20 @@
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, AppConfig, BookingJob, CourtType, JobKind, NewJob, StopAt } from "./api";
 
-const HOURS = Array.from({ length: 15 }, (_, i) => i + 7); // 7am–9pm
-const hourLabel = (h: number) => (h < 12 ? `${h}am` : h === 12 ? "12pm" : `${h - 12}pm`);
-const venueLabel = (slug: string) =>
-  slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-function minDate(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function fmt(iso: string | undefined): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-const STAGE_LABEL: Record<StopAt, string> = {
-  basket: "Add to basket only",
-  details: "Basket + fill my details",
-  checkout: "Basket + details + proceed to checkout"
+const HOURS = Array.from({ length: 15 }, (_, i) => i + 7);
+const hourLabel = (h: number) => (h < 12 ? `${h}:00` : h === 12 ? "12:00" : `${h - 12}:00`);
+const venueLabel = (slug: string) => slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const isoDate = (date: Date) => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
+const fmt = (iso?: string) => iso ? new Date(iso).toLocaleString("en-GB", {
+  weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"
+}) : "—";
+
+function Mark() {
+  return <span className="mark" aria-hidden="true"><i /><i /><i /></span>;
+}
 
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -33,15 +22,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
+  const [showDetails, setShowDetails] = useState(false);
   const [form, setForm] = useState({
     kind: "booking" as JobKind,
     venue: "bethnal-green-gardens",
-    date: "",
+    date: isoDate(new Date()),
     hour: "19",
     courtType: "padel" as CourtType,
     courtNumber: "",
-    stopAt: "checkout" as StopAt,
+    stopAt: "payment" as StopAt,
     fullName: "",
     email: "",
     mobile: "",
@@ -49,52 +38,50 @@ export default function App() {
     dob: "",
     gender: "" as "" | "f" | "m" | "n"
   });
-  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
-  const refresh = useCallback(() => {
-    api.jobs().then(setJobs).catch((e) => setError(e.message));
-  }, []);
+  const days = useMemo(() => Array.from({ length: (config?.bookingWindowDays ?? 7) + 1 }, (_, i) => {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(date.getDate() + i);
+    return date;
+  }), [config?.bookingWindowDays]);
 
+  const refresh = useCallback(() => api.jobs().then(setJobs).catch((e) => setError(e.message)), []);
   useEffect(() => {
     api.config().then(setConfig).catch((e) => setError(e.message));
     refresh();
-    const t = setInterval(refresh, 10000);
-    return () => clearInterval(t);
+    const timer = setInterval(refresh, 10000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
+    if (form.kind === "booking" && (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender)) {
+      setShowDetails(true);
+      setError("Add your player details to finish setting up this booking.");
+      return;
+    }
     setSubmitting(true);
     try {
-      const job: NewJob =
-        form.kind === "probe"
-          ? { kind: "probe", venue: form.venue, date: form.date }
-          : {
-              kind: "booking",
-              venue: form.venue,
-              date: form.date,
-              time: form.hour,
-              courtType: form.courtType,
-              courtNumber: form.courtNumber || undefined,
-              stopAt: form.stopAt,
-              details: {
-                fullName: form.fullName,
-                email: form.email,
-                mobile: form.mobile,
-                otherTel: form.otherTel || undefined,
-                dob: form.dob || undefined,
-                gender: form.gender || undefined
-              }
-            };
-      const created = await api.createJob(job);
-      setNotice(
-        form.kind === "probe"
-          ? `Probe queued — starts ${fmt(created.fireAt)} and polls until ${form.date} opens, recording when it flips.`
-          : `Job queued — fires ${fmt(created.fireAt)} (${config?.warmupMinutes ?? 2}min before the ` +
-              `${config?.releaseTime ?? "00:00"} release, which is still TBC)`
-      );
+      const payload: NewJob = form.kind === "probe"
+        ? { kind: "probe", venue: form.venue, date: form.date }
+        : {
+            kind: "booking", venue: form.venue, date: form.date, time: form.hour,
+            courtType: form.courtType, courtNumber: form.courtNumber || undefined,
+            stopAt: form.stopAt,
+            details: {
+              fullName: form.fullName, email: form.email, mobile: form.mobile,
+              otherTel: form.otherTel || undefined, dob: form.dob,
+              gender: form.gender as "f" | "m" | "n"
+            }
+          };
+      const created = await api.createJob(payload);
+      setNotice(form.kind === "probe"
+        ? `Release watch set for ${form.date}.`
+        : `You're set. We'll start at ${fmt(created.fireAt)} and take it to payment.`);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -105,288 +92,140 @@ export default function App() {
 
   async function act(fn: () => Promise<unknown>) {
     setError(null);
-    try {
-      await fn();
-      refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    try { await fn(); refresh(); }
+    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   }
 
+  const selectedDay = days.find((day) => isoDate(day) === form.date) || days[0];
+
   return (
-    <main>
-      <header>
-        <h1>🎾 Padel Booker</h1>
-        <p>
-          Courts at Tennis Tower Hamlets open {config?.bookingWindowDays ?? 7} days ahead. Queue a
-          booking and it fires the moment the day is released
-          {config ? ` (assumed ${config.releaseTime} ${config.timezone} — TBC)` : ""}.
-        </p>
+    <div className="app-shell">
+      <nav className="topbar">
+        <a className="brand" href="#top"><Mark /><span>COURT/01</span></a>
+        <div className="nav-meta"><span>London courts</span><b>{jobs.filter((j) => j.status === "scheduled").length} upcoming</b></div>
+      </nav>
+
+      <header className="hero" id="top">
+        <img src="/images/padel-hero.jpg" alt="Padel players on an outdoor London court" />
+        <div className="hero-shade" />
+        <div className="hero-copy">
+          <span className="eyebrow">Play more · queue less</span>
+          <h1>Your next court,<br /><em>already handled.</em></h1>
+          <p>Choose the moment. We watch the release and get everything ready through to payment.</p>
+          <a className="hero-link" href="#booking">Find a court <span>↘</span></a>
+        </div>
+        <div className="hero-index"><span>51.5272° N</span><span>East London</span></div>
       </header>
 
-      {error && <div className="banner error">{error}</div>}
-      {notice && <div className="banner ok">{notice}</div>}
+      <main id="booking">
+        {error && <div className="toast error">{error}<button onClick={() => setError(null)}>×</button></div>}
+        {notice && <div className="toast success">{notice}<button onClick={() => setNotice(null)}>×</button></div>}
 
-      <form onSubmit={submit}>
-        <section>
-          <h2>Job type</h2>
-          <div className="kind-toggle">
-            <label className={form.kind === "booking" ? "selected" : ""}>
-              <input
-                type="radio"
-                name="kind"
-                checked={form.kind === "booking"}
-                onChange={() => set({ kind: "booking" })}
-              />
-              Book a court
-            </label>
-            <label className={form.kind === "probe" ? "selected" : ""}>
-              <input
-                type="radio"
-                name="kind"
-                checked={form.kind === "probe"}
-                onChange={() => set({ kind: "probe" })}
-              />
-              Find the release time
-            </label>
+        <form className="booking-studio" onSubmit={submit}>
+          <div className="section-heading">
+            <span className="step">01</span>
+            <div><span className="eyebrow dark">Build your session</span><h2>When are we playing?</h2></div>
+            <div className="mode-switch" aria-label="Job type">
+              <button type="button" className={form.kind === "booking" ? "active" : ""} onClick={() => set({ kind: "booking" })}>Book</button>
+              <button type="button" className={form.kind === "probe" ? "active" : ""} onClick={() => set({ kind: "probe" })}>Watch release</button>
+            </div>
           </div>
-          {form.kind === "probe" && (
-            <p className="hint">
-              Pick a date {(config?.bookingWindowDays ?? 7) + 1}+ days out. The probe starts just
-              before the assumed release, reloads the page every few minutes, and records the window
-              in which the day became bookable — then set RELEASE_TIME accordingly.
-            </p>
-          )}
-        </section>
 
-        <section>
-          <h2>{form.kind === "probe" ? "What to watch" : "Court"}</h2>
-          <div className="grid">
-            <label>
-              Venue
-              <select value={form.venue} onChange={(e) => set({ venue: e.target.value })}>
-                {(config?.venues ?? [form.venue]).map((v) => (
-                  <option key={v} value={v}>
-                    {venueLabel(v)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Date
-              <input
-                type="date"
-                required
-                min={minDate()}
-                value={form.date}
-                onChange={(e) => set({ date: e.target.value })}
-              />
-            </label>
-            {form.kind === "booking" && (
-            <>
-            <label>
-              Start time
-              <select value={form.hour} onChange={(e) => set({ hour: e.target.value })}>
-                {HOURS.map((h) => (
-                  <option key={h} value={h}>
-                    {hourLabel(h)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Court type
-              <select
-                value={form.courtType}
-                onChange={(e) => set({ courtType: e.target.value as CourtType })}
-              >
-                <option value="padel">Padel</option>
-                <option value="tennis">Tennis</option>
-              </select>
-            </label>
-            <label>
-              Court № <span className="hint">(optional — else first available)</span>
-              <input
-                type="number"
-                min="1"
-                placeholder="any"
-                value={form.courtNumber}
-                onChange={(e) => set({ courtNumber: e.target.value })}
-              />
-            </label>
-            <label>
-              How far to go
-              <select value={form.stopAt} onChange={(e) => set({ stopAt: e.target.value as StopAt })}>
-                {(Object.keys(STAGE_LABEL) as StopAt[]).map((s) => (
-                  <option key={s} value={s}>
-                    {STAGE_LABEL[s]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            </>
-            )}
+          <div className="venue-line">
+            <span className="field-number">A</span>
+            <label><span>Venue</span><select value={form.venue} onChange={(e) => set({ venue: e.target.value })}>
+              {(config?.venues ?? [form.venue]).map((venue) => <option key={venue} value={venue}>{venueLabel(venue)}</option>)}
+            </select></label>
+            {form.kind === "booking" && <div className="sport-pills">
+              <button type="button" className={form.courtType === "padel" ? "active" : ""} onClick={() => set({ courtType: "padel" })}>Padel</button>
+              <button type="button" className={form.courtType === "tennis" ? "active" : ""} onClick={() => set({ courtType: "tennis" })}>Tennis</button>
+            </div>}
           </div>
-        </section>
 
-        {form.kind === "booking" && (
-        <section>
-          <h2>Your details</h2>
-          <p className="hint">
-            What the site's checkout asks for. Payment is never automated — you finish it from the
-            confirmation the site sends.
-          </p>
-          <div className="grid">
-            <label>
-              Full name
-              <input
-                required
-                value={form.fullName}
-                onChange={(e) => set({ fullName: e.target.value })}
-              />
-            </label>
-            <label>
-              Email
-              <input
-                type="email"
-                required
-                value={form.email}
-                onChange={(e) => set({ email: e.target.value })}
-              />
-            </label>
-            <label>
-              Mobile
-              <input
-                type="tel"
-                required
-                value={form.mobile}
-                onChange={(e) => set({ mobile: e.target.value })}
-              />
-            </label>
-            <label>
-              Other phone <span className="hint">(optional)</span>
-              <input
-                type="tel"
-                value={form.otherTel}
-                onChange={(e) => set({ otherTel: e.target.value })}
-              />
-            </label>
-            <label>
-              Date of birth <span className="hint">(optional)</span>
-              <input type="date" value={form.dob} onChange={(e) => set({ dob: e.target.value })} />
-            </label>
-            <label>
-              Gender <span className="hint">(optional)</span>
-              <select
-                value={form.gender}
-                onChange={(e) => set({ gender: e.target.value as typeof form.gender })}
-              >
-                <option value="">Prefer not to say</option>
-                <option value="f">Female</option>
-                <option value="m">Male</option>
-              </select>
-            </label>
+          <div className="calendar-block">
+            <div className="calendar-label"><span className="field-number">B</span><span>Select a day</span><strong>{selectedDay.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</strong></div>
+            <div className="week-strip">
+              {days.map((day, index) => {
+                const value = isoDate(day);
+                return <button type="button" key={value} className={form.date === value ? "selected" : ""} onClick={() => set({ date: value })}>
+                  <span>{index === 0 ? "Today" : day.toLocaleDateString("en-GB", { weekday: "short" })}</span>
+                  <b>{day.getDate()}</b>
+                  <small>{day.toLocaleDateString("en-GB", { month: "short" })}</small>
+                </button>;
+              })}
+            </div>
           </div>
+
+          {form.kind === "booking" ? <div className="time-block">
+            <div className="calendar-label"><span className="field-number">C</span><span>Start time</span><strong>60 min session</strong></div>
+            <div className="time-grid">
+              {HOURS.map((hour) => <button type="button" key={hour} className={form.hour === String(hour) ? "selected" : ""} onClick={() => set({ hour: String(hour) })}>
+                {hourLabel(hour)}<small>{hour < 12 ? "AM" : "PM"}</small>
+              </button>)}
+            </div>
+          </div> : <div className="probe-note"><b>Release watch</b><p>We’ll monitor this date and record the moment courts become bookable.</p></div>}
+
+          {form.kind === "booking" && <div className="checkout-band">
+            <div className="photo-tile"><img src="/images/padel-racket.jpg" alt="Padel racket and ball beside the court glass" /></div>
+            <div className="player-panel">
+              <span className="eyebrow dark">Player profile</span>
+              <h3>{form.fullName || "Add your details once"}</h3>
+              <p>{form.email || "We use these to complete the venue checkout."}</p>
+              <button type="button" className="text-action" onClick={() => setShowDetails((open) => !open)}>{showDetails ? "Close details" : form.fullName ? "Edit details" : "Add player details"} <span>→</span></button>
+            </div>
+            <div className="booking-summary">
+              <span className="eyebrow">Selected</span>
+              <strong>{selectedDay.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}</strong>
+              <b>{hourLabel(Number(form.hour))} {Number(form.hour) < 12 ? "AM" : "PM"}</b>
+              <small>{venueLabel(form.venue)}</small>
+            </div>
+          </div>}
+
+          {form.kind === "booking" && showDetails && <div className="details-drawer">
+            <div className="drawer-title"><span>Player details</span><p>Required by the venue. Payment details are never stored.</p></div>
+            <div className="details-grid">
+              <label>Full name<input required value={form.fullName} onChange={(e) => set({ fullName: e.target.value })} /></label>
+              <label>Email<input required type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} /></label>
+              <label>Mobile<input required type="tel" value={form.mobile} onChange={(e) => set({ mobile: e.target.value })} /></label>
+              <label>Date of birth<input required type="date" value={form.dob} onChange={(e) => set({ dob: e.target.value })} /></label>
+              <label>Gender<select required value={form.gender} onChange={(e) => set({ gender: e.target.value as typeof form.gender })}><option value="" disabled>Select…</option><option value="f">Female</option><option value="m">Male</option><option value="n">Prefer not to say</option></select></label>
+              <label>Other phone <small>optional</small><input type="tel" value={form.otherTel} onChange={(e) => set({ otherTel: e.target.value })} /></label>
+            </div>
+          </div>}
+
+          <div className="submit-row">
+            <div><span>Automation</span><strong>{form.kind === "probe" ? "Watch and report" : "Stop safely at payment"}</strong></div>
+            <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : form.kind === "probe" ? "Watch this date" : "Queue this court"}<span>↗</span></button>
+          </div>
+        </form>
+
+        <section className="journey-section">
+          <div className="section-heading compact"><span className="step">02</span><div><span className="eyebrow dark">Your court diary</span><h2>Upcoming &amp; recent</h2></div></div>
+          {jobs.length === 0 ? <div className="empty-journey"><p>No sessions queued yet.</p><span>Your next court will appear here.</span></div> : <div className="journey-list">
+            {jobs.map((job) => <JobCard key={job.id} job={job} onRun={() => act(() => api.runNow(job.id))} onDelete={() => act(() => api.deleteJob(job.id))} />)}
+          </div>}
         </section>
-        )}
+      </main>
 
-        <button type="submit" disabled={submitting}>
-          {submitting ? "Queuing…" : form.kind === "probe" ? "Queue probe" : "Queue booking"}
-        </button>
-      </form>
-
-      <section>
-        <h2>Queued &amp; past jobs</h2>
-        {jobs.length === 0 ? (
-          <p className="hint">Nothing queued yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Booking</th>
-                <th>Fires</th>
-                <th>Status</th>
-                <th>Outcome</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((j) => (
-                <JobRow key={j.id} job={j} onRun={() => act(() => api.runNow(j.id))} onDelete={() => act(() => api.deleteJob(j.id))} />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </main>
+      <footer><div className="brand"><Mark /><span>COURT/01</span></div><p>Less refreshing. More playing.</p><span>Built for London courts · {new Date().getFullYear()}</span></footer>
+    </div>
   );
 }
 
-function JobRow({ job, onRun, onDelete }: { job: BookingJob; onRun: () => void; onDelete: () => void }) {
+function JobCard({ job, onRun, onDelete }: { job: BookingJob; onRun: () => void; onDelete: () => void }) {
   const [artifacts, setArtifacts] = useState<string[]>([]);
   useEffect(() => {
-    if (job.status === "success" || job.status === "failed") {
-      api.artifacts(job.id).then(setArtifacts).catch(() => {});
-    }
+    if (job.status === "success" || job.status === "failed") api.artifacts(job.id).then(setArtifacts).catch(() => {});
   }, [job.id, job.status]);
-
-  return (
-    <tr>
-      <td>
-        <strong>
-          {job.kind === "probe"
-            ? `release probe · ${job.date}`
-            : `${job.courtType}${job.courtNumber ? ` ${job.courtNumber}` : ""} · ${hourLabel(job.hour ?? 0)} · ${job.date}`}
-        </strong>
-        <div className="hint">
-          {venueLabel(job.venue)}
-          {job.kind === "booking" ? ` · to ${job.stopAt}` : ""}
-        </div>
-      </td>
-      <td>{fmt(job.fireAt)}</td>
-      <td>
-        <span className={`status ${job.status}`}>{job.status}</span>
-      </td>
-      <td className="outcome">
-        {job.result?.kind === "booking" && (
-          <>
-            {job.result.court} {job.result.time} {job.result.price ?? ""} — reached{" "}
-            {job.result.stageReached}
-          </>
-        )}
-        {job.result?.kind === "probe" && (
-          <>
-            {job.result.lastClosedAt
-              ? `Released between ${fmt(job.result.lastClosedAt)} and ${fmt(job.result.openedAt)}`
-              : `Already open when first checked (${fmt(job.result.openedAt)})`}{" "}
-            — {job.result.availableCount}/{job.result.slotCount} slots available
-          </>
-        )}
-        {job.error && <span className="error-text">{job.error}</span>}
-        {artifacts.length > 0 && (
-          <div className="artifacts">
-            {artifacts
-              .filter((f) => f.endsWith(".png"))
-              .map((f) => (
-                <a key={f} href={`/api/jobs/${job.id}/artifacts/${f}`} target="_blank" rel="noreferrer">
-                  {f.replace(".png", "")}
-                </a>
-              ))}
-          </div>
-        )}
-      </td>
-      <td className="actions">
-        {job.status !== "running" && (
-          <>
-            <button type="button" onClick={onRun} title="Fire on the next scheduler tick">
-              {job.status === "failed" ? "Retry now" : "Run now"}
-            </button>
-            <button type="button" className="danger" onClick={onDelete}>
-              Delete
-            </button>
-          </>
-        )}
-      </td>
-    </tr>
-  );
+  const date = new Date(`${job.date}T12:00:00`);
+  return <article className="journey-card">
+    <div className="date-stamp"><span>{date.toLocaleDateString("en-GB", { month: "short" })}</span><b>{date.getDate()}</b></div>
+    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · payment page ready` : job.error || `Starts ${fmt(job.fireAt)}`}</p></div>
+    <span className={`status ${job.status}`}><i />{job.status}</span>
+    <div className="card-actions">
+      {artifacts.filter((file) => file.endsWith(".png")).slice(-1).map((file) => <a key={file} href={`/api/jobs/${job.id}/artifacts/${file}`} target="_blank" rel="noreferrer">View</a>)}
+      {job.status !== "running" && <button type="button" onClick={onRun}>{job.status === "failed" ? "Retry" : "Run now"}</button>}
+      {job.status !== "running" && <button type="button" className="remove" onClick={onDelete} aria-label="Delete job">×</button>}
+    </div>
+  </article>;
 }

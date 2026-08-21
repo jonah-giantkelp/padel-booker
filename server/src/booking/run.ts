@@ -82,32 +82,39 @@ async function addToBasket(page: Page, token: string): Promise<void> {
  * email, mobile, tel, dob, gender).
  */
 async function fillDetails(page: Page, details: BookingDetails): Promise<void> {
-  const ok = await page.evaluate((d) => {
-    const form = document.getElementById("frm_basket_customer") as HTMLFormElement | null;
-    if (!form) return false;
-    const set = (name: string, value: string | undefined) => {
-      if (!value) return;
-      const input = form.querySelector<HTMLInputElement>(`input[name='${name}']`);
+  const ok = await page.evaluate(
+    () => !!document.getElementById("frm_basket_customer")
+  );
+  if (!ok) throw new Error("Customer details form (#frm_basket_customer) not found on basket page");
+
+  for (const [name, value] of [
+    ["name", details.fullName],
+    ["email", details.email],
+    ["mobile", details.mobile],
+    ["tel", details.otherTel],
+    ["dob", details.dob]
+  ] as const) {
+    if (!value) continue;
+    await page.evaluate((field) => {
+      const input = document.querySelector<HTMLInputElement>(
+        `#frm_basket_customer input[name='${field.name}']`
+      );
       if (!input) return;
-      input.value = value;
+      input.value = field.value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
-    };
-    set("name", d.fullName);
-    set("email", d.email);
-    set("mobile", d.mobile);
-    set("tel", d.otherTel);
-    set("dob", d.dob);
-    if (d.gender) {
-      const radio = form.querySelector<HTMLInputElement>(`input[name='gender'][value='${d.gender}']`);
-      if (radio) {
-        radio.checked = true;
-        radio.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-    }
-    return true;
-  }, details as unknown as Record<string, string | undefined>);
-  if (!ok) throw new Error("Customer details form (#frm_basket_customer) not found on basket page");
+    }, { name, value });
+  }
+  if (details.gender) {
+    await page.evaluate((gender) => {
+      const radio = document.querySelector<HTMLInputElement>(
+        `#frm_basket_customer input[name='gender'][value='${gender}']`
+      );
+      if (!radio) return;
+      radio.checked = true;
+      radio.dispatchEvent(new Event("change", { bubbles: true }));
+    }, details.gender);
+  }
 }
 
 /** Submit the details form ("Save and checkout") and land on whatever follows. */
@@ -123,9 +130,56 @@ async function saveAndCheckout(page: Page): Promise<void> {
   ]);
 }
 
+type CheckoutPageKind = "payment" | "verification" | "error" | "unknown";
+
+export function classifyCheckoutSnapshot(snapshot: {
+  url: string;
+  title: string;
+  text: string;
+  hasCardField: boolean;
+  hasPaymentFrame: boolean;
+  hasOtpField: boolean;
+  hasFormError: boolean;
+}): CheckoutPageKind {
+  const haystack = `${snapshot.url} ${snapshot.title} ${snapshot.text}`.toLowerCase();
+  if (snapshot.hasFormError) return "error";
+  if (
+    snapshot.hasOtpField ||
+    /\b(one[- ]time|verification|security|authentication) (code|password)\b/.test(haystack) ||
+    /\benter (the |your )?(code|otp)\b/.test(haystack)
+  ) return "verification";
+  if (
+    snapshot.hasCardField ||
+    snapshot.hasPaymentFrame ||
+    /\b(card (number|details)|payment details|pay securely|billing address)\b/.test(haystack) ||
+    /\/(pay|payment)(\/|\?|$)/.test(snapshot.url.toLowerCase())
+  ) return "payment";
+  return "unknown";
+}
+
+async function checkoutPageKind(page: Page): Promise<CheckoutPageKind> {
+  const dom = await page.evaluate(() => ({
+    title: document.title,
+    text: (document.body?.innerText || "").replace(/\s+/g, " ").slice(0, 20000),
+    hasCardField: !!document.querySelector(
+      "input[autocomplete='cc-number'], input[name*='card' i], input[id*='card' i]"
+    ),
+    hasPaymentFrame: !!document.querySelector(
+      "iframe[src*='stripe' i], iframe[src*='payment' i], iframe[title*='card' i]"
+    ),
+    hasOtpField: !!document.querySelector(
+      "input[autocomplete='one-time-code'], input[name*='otp' i], input[id*='otp' i]"
+    ),
+    hasFormError: !!document.querySelector(
+      ".error:not(:empty), .errors:not(:empty), .validation-summary-errors:not(:empty)"
+    )
+  }));
+  return classifyCheckoutSnapshot({ url: page.url(), ...dom });
+}
+
 /**
  * Execute a booking job end to end: gate -> wait for release -> find slot ->
- * basket -> fill details -> checkout, saving artifacts at each stage and
+ * basket -> fill details -> verified payment page, saving artifacts at each stage and
  * stopping at job.stopAt.
  */
 export async function runBookingJob(job: BookingJob): Promise<JobResult> {
@@ -133,7 +187,10 @@ export async function runBookingJob(job: BookingJob): Promise<JobResult> {
   if (hour === undefined || !courtType || !details) {
     throw new Error("Booking job is missing hour/courtType/details");
   }
-  const stopAt = job.stopAt || "checkout";
+  const stopAt = job.stopAt || "payment";
+  if (stopAt === "payment" && (!details.dob || !details.gender)) {
+    throw new Error("Payment-stage jobs require customer date of birth and gender");
+  }
   const dir = artifactsDir(job.id);
   const url = `${config.baseUrl}/book/courts/${job.venue}/${job.date}`;
 
@@ -178,9 +235,25 @@ export async function runBookingJob(job: BookingJob): Promise<JobResult> {
 
     await saveAndCheckout(page);
     await delay(500);
-    await saveArtifacts(page, dir, "3-checkout");
-    log("Details submitted — now on", page.url());
-    return asResult("checkout", match);
+    const pageKind = await checkoutPageKind(page);
+    await saveArtifacts(page, dir, `3-${pageKind}`);
+    log("Details submitted", { pageKind, url: page.url() });
+    if (pageKind === "verification") {
+      throw new Error(
+        "Verification/2FA is required before payment. The checkpoint was saved; no code was submitted."
+      );
+    }
+    if (pageKind === "error") {
+      throw new Error("The site rejected the customer details; see the saved error-page artifact.");
+    }
+    if (pageKind !== "payment") {
+      throw new Error(
+        `Details were submitted but the resulting page was not recognisably a payment page (${page.url()}).`
+      );
+    }
+    // Deliberately stop here. No card fields are filled and no payment/confirm
+    // control is clicked anywhere in this runner.
+    return asResult("payment", match);
   } catch (err) {
     await saveArtifacts(page, dir, "error").catch(() => {});
     throw err;

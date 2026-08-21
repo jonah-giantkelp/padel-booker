@@ -79,13 +79,6 @@ async function readSitekey(page: Page): Promise<{ sitekey: string | null; action
 async function injectAndSubmit(page: Page, token: string): Promise<void> {
   await page.evaluate((t) => {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-    const set = (input: HTMLInputElement | null) => {
-      if (!input) return;
-      if (setter) setter.call(input, t);
-      else input.value = t;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    };
     // Turnstile posts its token in a hidden input named cf-turnstile-response.
     let input = document.querySelector<HTMLInputElement>("input[name='cf-turnstile-response']");
     if (!input) {
@@ -94,8 +87,22 @@ async function injectAndSubmit(page: Page, token: string): Promise<void> {
       input.name = "cf-turnstile-response";
       (document.getElementById("verify-form") || document.forms[0])?.appendChild(input);
     }
-    set(input);
-    set(document.querySelector<HTMLInputElement>("[id^='cf-chl-widget-'][id$='_response']"));
+    // Keep this callback free of nested functions: tsx/esbuild can otherwise
+    // inject its private __name helper, which does not exist in the browser.
+    if (setter) setter.call(input, t);
+    else input.value = t;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    const widgetInput = document.querySelector<HTMLInputElement>(
+      "[id^='cf-chl-widget-'][id$='_response']"
+    );
+    if (widgetInput && widgetInput !== input) {
+      if (setter) setter.call(widgetInput, t);
+      else widgetInput.value = t;
+      widgetInput.dispatchEvent(new Event("input", { bubbles: true }));
+      widgetInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     const btn = document.getElementById("submit-btn") as HTMLButtonElement | null;
     if (btn) btn.disabled = false;
     const form = (document.getElementById("verify-form") as HTMLFormElement | null) || document.forms[0];

@@ -8,7 +8,7 @@ import { JobStore } from "../jobs/store";
 import { BookingDetails, CourtType, JobKind, StopAt } from "../jobs/types";
 
 const COURT_TYPES: CourtType[] = ["padel", "tennis"];
-const STOP_ATS: StopAt[] = ["basket", "details", "checkout"];
+const STOP_ATS: StopAt[] = ["basket", "details", "payment"];
 
 function badRequest(message: string): Error & { status?: number } {
   const err: Error & { status?: number } = new Error(message);
@@ -19,23 +19,28 @@ function badRequest(message: string): Error & { status?: number } {
 function parseDetails(body: Record<string, unknown>): BookingDetails {
   const d = (body.details || {}) as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  const details: BookingDetails = {
-    fullName: str(d.fullName),
-    email: str(d.email),
-    mobile: str(d.mobile)
-  };
-  if (!details.fullName || !details.email || !details.mobile) {
+  const fullName = str(d.fullName);
+  const email = str(d.email);
+  const mobile = str(d.mobile);
+  const dob = str(d.dob);
+  const gender = str(d.gender);
+  if (!fullName || !email || !mobile) {
     throw badRequest("details.fullName, details.email and details.mobile are required");
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
+    throw badRequest("details.dob is required and must be YYYY-MM-DD");
+  }
+  if (!["f", "m", "n"].includes(gender)) {
+    throw badRequest("details.gender is required and must be f, m or n");
+  }
+  const details: BookingDetails = {
+    fullName,
+    email,
+    mobile,
+    dob,
+    gender: gender as BookingDetails["gender"]
+  };
   if (str(d.otherTel)) details.otherTel = str(d.otherTel);
-  if (str(d.dob)) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(str(d.dob))) throw badRequest("details.dob must be YYYY-MM-DD");
-    details.dob = str(d.dob);
-  }
-  if (str(d.gender)) {
-    if (!["f", "m", "n"].includes(str(d.gender))) throw badRequest("details.gender must be f, m or n");
-    details.gender = str(d.gender) as BookingDetails["gender"];
-  }
   return details;
 }
 
@@ -96,8 +101,12 @@ export function buildRouter(store: JobStore): Router {
         }
       }
 
-      const stopAt = (body.stopAt as StopAt) || "checkout";
-      if (!STOP_ATS.includes(stopAt)) throw badRequest("stopAt must be basket, details or checkout");
+      // "checkout" was the old, ambiguous name for the page immediately after
+      // details. Keep accepting it for existing clients, but the runner now
+      // proves it has reached an actual payment page.
+      const requestedStop = body.stopAt === "checkout" ? "payment" : body.stopAt;
+      const stopAt = (requestedStop as StopAt) || "payment";
+      if (!STOP_ATS.includes(stopAt)) throw badRequest("stopAt must be basket, details or payment");
 
       const details = parseDetails(body);
 

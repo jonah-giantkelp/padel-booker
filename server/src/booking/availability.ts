@@ -33,9 +33,6 @@ export async function closedMessage(page: Page): Promise<string | null> {
 
 export async function extractSlots(page: Page): Promise<Availability> {
   return page.evaluate(() => {
-    const text = (el: Element | null | undefined) =>
-      (el?.textContent || "").replace(/\s+/g, " ").trim();
-
     // Courtside renders availability as a <table> inside .availability: each row
     // is a time (th.time) with one label.court per court. An available court has
     // an <input.bookable> carrying the booking token + data-price; a booked one
@@ -50,12 +47,17 @@ export async function extractSlots(page: Page): Promise<Availability> {
     }[] = [];
     const rows = document.querySelectorAll(".availability table tr");
     for (const row of rows) {
-      const time = text(row.querySelector("th.time"));
+      const time = (row.querySelector("th.time")?.textContent || "").replace(/\s+/g, " ").trim();
       if (!time) continue;
       for (const label of row.querySelectorAll("label.court")) {
         const button = label.querySelector(".button");
         const priceEl = label.querySelector(".price");
-        const name = text(button).replace(text(priceEl), "").trim();
+        const priceText = (priceEl?.textContent || "").replace(/\s+/g, " ").trim();
+        const name = (button?.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .replace(priceText, "")
+          .trim();
         const input = label.querySelector("input");
         const available = button?.classList.contains("available") || false;
         slots.push({
@@ -64,7 +66,7 @@ export async function extractSlots(page: Page): Promise<Availability> {
           available,
           price: input?.getAttribute("data-price")
             ? `£${input.getAttribute("data-price")}`
-            : text(priceEl) || null,
+            : priceText || null,
           concession: input?.getAttribute("data-concession")
             ? `£${input.getAttribute("data-concession")}`
             : null,
@@ -73,15 +75,18 @@ export async function extractSlots(page: Page): Promise<Availability> {
       }
     }
 
-    const availableCount = slots.filter((s) => s.available).length;
+    let availableCount = 0;
+    for (const slot of slots) if (slot.available) availableCount += 1;
+    const availability = document.querySelector(".availability");
+    const previousDate = availability?.previousElementSibling?.querySelector(".date");
+    const headingDate = document.querySelector(".heading .date");
     return {
       title: document.title,
-      heading: text(document.querySelector("h1")),
-      date:
-        text(
-          document.querySelector(".availability")?.previousElementSibling?.querySelector(".date")
-        ) || text(document.querySelector(".heading .date")),
-      venue: text(document.querySelector(".heading .venue .name")),
+      heading: (document.querySelector("h1")?.textContent || "").replace(/\s+/g, " ").trim(),
+      date: ((previousDate?.textContent || headingDate?.textContent) || "").replace(/\s+/g, " ").trim(),
+      venue: (document.querySelector(".heading .venue .name")?.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim(),
       slotCount: slots.length,
       availableCount,
       slots

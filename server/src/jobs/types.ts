@@ -10,7 +10,7 @@ export type JobStatus = "scheduled" | "running" | "success" | "failed";
 export type JobKind = "booking" | "probe";
 
 /** How far the automated flow should go. */
-export type StopAt = "basket" | "details" | "checkout";
+export type StopAt = "basket" | "details" | "payment";
 
 /** Customer fields the site's basket page asks for (form #frm_basket_customer). */
 export interface BookingDetails {
@@ -19,8 +19,8 @@ export interface BookingDetails {
   mobile: string;
   otherTel?: string;
   /** YYYY-MM-DD */
-  dob?: string;
-  gender?: "f" | "m" | "n";
+  dob: string;
+  gender: "f" | "m" | "n";
 }
 
 export interface JobResult {

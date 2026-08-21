@@ -27,7 +27,7 @@ React (web/) ──/api──▶ Express (server/) ──▶ scheduler ──▶
    alternatives in the error.
 5. Adds it to the basket, fills the site's "Your details" checkout form
    (name, email, mobile, phone, DOB, gender) and — depending on the job's
-   "how far to go" setting — submits it to reach checkout.
+   "how far to go" setting — submits it and verifies that the payment page is displayed.
 6. Saves a screenshot + HTML at every stage to `data/artifacts/<jobId>/`,
    viewable from the web UI.
 
@@ -76,9 +76,9 @@ npm run cli:probe-release --workspace server -- --date 2026-08-27 --once
 | `time` | required | – | `7pm` / `19:00`, on the hour |
 | `courtType` | required | – | `padel` or `tennis` |
 | `courtNumber` | optional | – | else first available |
-| `stopAt` | optional | – | `basket` / `details` / `checkout` (default) |
-| `details.fullName/email/mobile` | required | – | what the site's checkout demands |
-| `details.otherTel/dob/gender` | optional | – | `dob` YYYY-MM-DD, `gender` f/m/n |
+| `stopAt` | optional | – | `basket` / `details` / `payment` (default) |
+| `details.fullName/email/mobile/dob/gender` | required | – | `dob` YYYY-MM-DD, `gender` f/m/n |
+| `details.otherTel` | optional | – | alternative contact number |
 
 ## Release time (probe jobs)
 

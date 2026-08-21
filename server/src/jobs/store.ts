@@ -23,6 +23,13 @@ export class JobStore {
     // A job left "running" by a crash/restart should run again.
     let dirty = false;
     for (const job of this.jobs) {
+      // Migrate the old ambiguous stage name. At runtime an old "checkout"
+      // job already followed this path, but persisting the rename keeps the UI
+      // and subsequent retries consistent.
+      if ((job.stopAt as string | undefined) === "checkout") {
+        job.stopAt = "payment";
+        dirty = true;
+      }
       if (job.status === "running") {
         job.status = "scheduled";
         dirty = true;
