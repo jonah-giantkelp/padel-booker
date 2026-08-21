@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "puppeteer";
 import { artifactsDir, config, profileDir } from "../config";
-import { BookingDetails, BookingJob, JobResult } from "../jobs/types";
+import { BookingDetails, BookingJob, CardDetails, JobResult } from "../jobs/types";
 import { delay, log } from "../log";
+import {
+  describeCardSurfaces,
+  fillAndSubmitCard,
+  openCardForm,
+  settlePayment
+} from "./payment";
 import {
   extractSlots,
   findSlot,
@@ -182,14 +188,17 @@ async function checkoutPageKind(page: Page): Promise<CheckoutPageKind> {
  * basket -> fill details -> verified payment page, saving artifacts at each stage and
  * stopping at job.stopAt.
  */
-export async function runBookingJob(job: BookingJob): Promise<JobResult> {
+export async function runBookingJob(job: BookingJob, card?: CardDetails): Promise<JobResult> {
   const { hour, courtType, details } = job;
   if (hour === undefined || !courtType || !details) {
     throw new Error("Booking job is missing hour/courtType/details");
   }
   const stopAt = job.stopAt || "payment";
-  if (stopAt === "payment" && (!details.dob || !details.gender)) {
+  if (stopAt !== "basket" && stopAt !== "details" && (!details.dob || !details.gender)) {
     throw new Error("Payment-stage jobs require customer date of birth and gender");
+  }
+  if (stopAt === "paid" && !card) {
+    throw new Error("stopAt=paid requires card details");
   }
   const dir = artifactsDir(job.id);
   const url = `${config.baseUrl}/book/courts/${job.venue}/${job.date}`;
@@ -251,9 +260,40 @@ export async function runBookingJob(job: BookingJob): Promise<JobResult> {
         `Details were submitted but the resulting page was not recognisably a payment page (${page.url()}).`
       );
     }
-    // Deliberately stop here. No card fields are filled and no payment/confirm
-    // control is clicked anywhere in this runner.
-    return asResult("payment", match);
+    // Up to here no card control has been touched.
+    if (stopAt === "payment") return asResult("payment", match);
+
+    await openCardForm(page);
+    await saveArtifacts(page, dir, "4-card");
+    await fs.writeFile(
+      path.join(dir, "4-card-surfaces.json"),
+      JSON.stringify(await describeCardSurfaces(page), null, 2)
+    );
+    log("Card form opened", { url: page.url() });
+    if (stopAt === "card") return asResult("card", match);
+
+    await fillAndSubmitCard(page, card as CardDetails);
+    // Let the processing state replace the form so the screenshot doesn't
+    // capture the typed card number.
+    await delay(1500);
+    await saveArtifacts(page, dir, "5-card-submitted").catch(() => {});
+    const outcome = await settlePayment(page, config.paySettleSeconds);
+    await saveArtifacts(page, dir, `6-${outcome}`);
+    log("Payment settled", { outcome, url: page.url() });
+    if (outcome === "paid") return asResult("paid", match);
+    if (outcome === "challenge") {
+      throw new Error(
+        "Payment stopped at a 3DS challenge and it was not approved in time. " +
+          "The slot may still be held in the basket — pay manually if you're quick."
+      );
+    }
+    if (outcome === "declined") {
+      throw new Error("The card was declined; see the 6-declined artifact for the exact message.");
+    }
+    throw new Error(
+      `Payment was submitted but no confirmation appeared within ${config.paySettleSeconds}s — ` +
+        "check the 6-unknown artifact and the venue email before retrying, it MAY have charged."
+    );
   } catch (err) {
     await saveArtifacts(page, dir, "error").catch(() => {});
     throw err;

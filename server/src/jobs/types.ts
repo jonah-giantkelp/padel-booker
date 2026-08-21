@@ -9,8 +9,28 @@ export type JobStatus = "scheduled" | "running" | "success" | "failed";
  */
 export type JobKind = "booking" | "probe";
 
-/** How far the automated flow should go. */
-export type StopAt = "basket" | "details" | "payment";
+/**
+ * How far the automated flow should go.
+ * payment — stop once the payment page is verified (no card touched).
+ * card    — additionally click "Pay with card" and capture what the card form
+ *           looks like (fields/iframes), without entering anything.
+ * paid    — fill the card details and confirm the payment.
+ */
+export type StopAt = "basket" | "details" | "payment" | "card" | "paid";
+
+/** Card details for stopAt "paid". Held encrypted at rest (see cardVault). */
+export interface CardDetails {
+  /** digits only */
+  number: string;
+  /** 1-12 */
+  expMonth: number;
+  /** four digits */
+  expYear: number;
+  cvc: string;
+  /** name on card */
+  name: string;
+  postcode: string;
+}
 
 /** Customer fields the site's basket page asks for (form #frm_basket_customer). */
 export interface BookingDetails {
@@ -56,6 +76,10 @@ export interface BookingJob {
   courtNumber?: number;
   details?: BookingDetails;
   stopAt?: StopAt;
+  /** AES-256-GCM blob of CardDetails (stopAt "paid" only); cleared on success */
+  cardEnc?: string;
+  /** kept for display after cardEnc is scrubbed */
+  cardLast4?: string;
   /** ISO timestamp at which the scheduler starts the job */
   fireAt: string;
   status: JobStatus;

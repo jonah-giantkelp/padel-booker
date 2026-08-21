@@ -1,6 +1,15 @@
 export type CourtType = "padel" | "tennis";
 export type JobStatus = "scheduled" | "running" | "success" | "failed";
-export type StopAt = "basket" | "details" | "payment";
+export type StopAt = "basket" | "details" | "payment" | "card" | "paid";
+
+export interface CardInput {
+  number: string;
+  /** MM/YY */
+  expiry: string;
+  cvc: string;
+  name: string;
+  postcode: string;
+}
 export type JobKind = "booking" | "probe";
 
 export interface BookingDetails {
@@ -40,6 +49,7 @@ export interface BookingJob {
   courtNumber?: number;
   details?: BookingDetails;
   stopAt?: StopAt;
+  cardLast4?: string;
   fireAt: string;
   status: JobStatus;
   startedAt?: string;
@@ -73,6 +83,7 @@ export interface NewJob {
   courtNumber?: string;
   stopAt?: StopAt;
   details?: BookingDetails;
+  card?: CardInput;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

@@ -27,12 +27,32 @@ React (web/) ──/api──▶ Express (server/) ──▶ scheduler ──▶
    alternatives in the error.
 5. Adds it to the basket, fills the site's "Your details" checkout form
    (name, email, mobile, phone, DOB, gender) and — depending on the job's
-   "how far to go" setting — submits it and verifies that the payment page is displayed.
+   "how far to go" setting — submits it and verifies that the payment page is
+   displayed, opens the Stripe card form, or fills the card and pays.
 6. Saves a screenshot + HTML at every stage to `data/artifacts/<jobId>/`,
    viewable from the web UI.
 
-**Payment is never automated** and no card details are stored; complete the
-final payment step yourself.
+## Auto-pay (`stopAt: "paid"`)
+
+Optional — the default remains stopping at the payment page. To enable it, set
+`CARD_ENC_KEY` (`openssl rand -hex 32`); the card entered at queue time is
+encrypted (AES-256-GCM) into `jobs.json`, never returned by the API, decrypted
+only when the job fires, and scrubbed once the job succeeds.
+
+The card surface (`/basket/pay/card`) is Stripe; the filler handles both
+hosted Checkout and embedded Elements. A `stopAt: "card"` job clicks "Pay with
+card" and saves a `4-card-surfaces.json` inventory of every frame/field —
+run one first (any cheap daytime slot) to see the real form before trusting
+auto-pay overnight.
+
+After submitting, the runner waits up to `PAY_SETTLE_SECONDS` and classifies
+the outcome: **paid** (job succeeds), **declined**, or **3DS challenge** —
+challenges can't be answered unattended, so the job fails with the challenge
+screenshotted (the £24 fee usually rides the low-value SCA exemption, but the
+issuer must challenge every ~£85 cumulative; a challenged purchase on the same
+card earlier in the evening resets that counter). If no outcome appears the
+job fails with a warning that the card **may** have been charged — check the
+artifacts before retrying.
 
 ## Local development
 
@@ -65,6 +85,14 @@ Tests: `npm test` (slot matching, time parsing, fire-time computation).
 # Book directly, right now (defaults to --stop-at basket):
 npm run cli:book --workspace server -- --date 2026-08-25 --time 7am --type padel
 
+# Probe what the Stripe card form looks like (no card data touched):
+npm run cli:book --workspace server -- --date 2026-08-25 --time 7am --type padel \
+  --stop-at card --name "J Smith" --email j@x.com --mobile 07700900000 \
+  --dob 1990-01-01 --gender m
+
+# Actually pay (card via env: CARD_NUMBER, CARD_EXPIRY, CARD_CVC, CARD_NAME, CARD_POSTCODE):
+npm run cli:book --workspace server -- ... --stop-at paid
+
 # Find the release time / watch a date until it opens:
 npm run cli:probe-release --workspace server -- --date 2026-08-27 --once
 ```
@@ -81,9 +109,10 @@ npm run cli:probe-release --workspace server -- --date 2026-08-27 --once
 | `time` | required | – | `7pm` / `19:00`, on the hour |
 | `courtType` | required | – | `padel` or `tennis` |
 | `courtNumber` | optional | – | else first available |
-| `stopAt` | optional | – | `basket` / `details` / `payment` (default) |
+| `stopAt` | optional | – | `basket` / `details` / `payment` (default) / `card` (capture the card form) / `paid` (pay) |
 | `details.fullName/email/mobile/dob/gender` | required | – | `dob` YYYY-MM-DD, `gender` f/m/n |
 | `details.otherTel` | optional | – | alternative contact number |
+| `card.number/expiry/cvc/name/postcode` | `stopAt: "paid"` only | – | `expiry` MM/YY; stored encrypted, needs `CARD_ENC_KEY` |
 
 ## Release time (probe jobs)
 
@@ -131,6 +160,8 @@ single-instance resources.
 | var | default | notes |
 |-----|---------|-------|
 | `TWO_CAPTCHA_API_KEY` | – | required for the Turnstile gate |
+| `CARD_ENC_KEY` | – | 32-byte hex key for card encryption; unset = auto-pay disabled |
+| `PAY_SETTLE_SECONDS` | `180` | how long to wait for payment confirmation / 3DS |
 | `RELEASE_TIME` | `00:00` | when the 7-days-ahead day drops (London time, TBC) |
 | `WARMUP_MINUTES` | `2` | head start before `RELEASE_TIME` |
 | `POLL_SECONDS` | `10` | reload cadence while waiting for the drop |

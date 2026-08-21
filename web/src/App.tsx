@@ -38,7 +38,12 @@ export default function App() {
     mobile: "",
     otherTel: "",
     dob: "",
-    gender: "" as "" | "f" | "m" | "n"
+    gender: "" as "" | "f" | "m" | "n",
+    cardNumber: "",
+    cardExpiry: "",
+    cardCvc: "",
+    cardName: "",
+    cardPostcode: ""
   });
   const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
 
@@ -86,6 +91,11 @@ export default function App() {
       setError("Add your player details to finish setting up this booking.");
       return;
     }
+    if (form.kind === "booking" && form.stopAt === "paid" &&
+        (!form.cardNumber || !form.cardExpiry || !form.cardCvc || !form.cardName || !form.cardPostcode)) {
+      setError("Auto-pay needs the full card details (number, expiry, CVC, name, postcode).");
+      return;
+    }
     setSubmitting(true);
     try {
       const payload: NewJob = form.kind === "probe"
@@ -98,12 +108,17 @@ export default function App() {
               fullName: form.fullName, email: form.email, mobile: form.mobile,
               otherTel: form.otherTel || undefined, dob: form.dob,
               gender: form.gender as "f" | "m" | "n"
-            }
+            },
+            card: form.stopAt === "paid" ? {
+              number: form.cardNumber, expiry: form.cardExpiry, cvc: form.cardCvc,
+              name: form.cardName, postcode: form.cardPostcode
+            } : undefined
           };
       const created = await api.createJob(payload);
+      if (form.stopAt === "paid") set({ cardNumber: "", cardExpiry: "", cardCvc: "" });
       setNotice(form.kind === "probe"
         ? `Release watch set for ${form.date}.`
-        : `You're set. We'll start at ${fmt(created.fireAt)} and take it to payment.`);
+        : `You're set. We'll start at ${fmt(created.fireAt)} and ${form.stopAt === "paid" ? "pay automatically" : "take it to payment"}.`);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -207,8 +222,26 @@ export default function App() {
             </div>
           </div>}
 
+          {form.kind === "booking" && <div className="details-drawer">
+            <div className="drawer-title"><span>Payment</span><p>Choose whether we hand over at the payment page or pay for you.</p></div>
+            <div className="mode-switch" aria-label="Automation level">
+              <button type="button" className={form.stopAt !== "paid" ? "active" : ""} onClick={() => set({ stopAt: "payment" })}>Stop at payment</button>
+              <button type="button" className={form.stopAt === "paid" ? "active" : ""} onClick={() => set({ stopAt: "paid" })}>Auto-pay</button>
+            </div>
+            {form.stopAt === "paid" && <>
+              <div className="details-grid">
+                <label>Card number<input required inputMode="numeric" autoComplete="cc-number" placeholder="4242 4242 4242 4242" value={form.cardNumber} onChange={(e) => set({ cardNumber: e.target.value })} /></label>
+                <label>Expiry<input required placeholder="MM/YY" autoComplete="cc-exp" value={form.cardExpiry} onChange={(e) => set({ cardExpiry: e.target.value })} /></label>
+                <label>CVC<input required inputMode="numeric" autoComplete="cc-csc" placeholder="123" value={form.cardCvc} onChange={(e) => set({ cardCvc: e.target.value })} /></label>
+                <label>Name on card<input required autoComplete="cc-name" value={form.cardName} onChange={(e) => set({ cardName: e.target.value })} /></label>
+                <label>Billing postcode<input required autoComplete="postal-code" value={form.cardPostcode} onChange={(e) => set({ cardPostcode: e.target.value })} /></label>
+              </div>
+              <p className="card-note">Encrypted at rest, used once for this booking, deleted after it succeeds. If the bank demands a 3DS check the job fails with the challenge screenshotted — a purchase on this card earlier the same evening makes that much less likely.</p>
+            </>}
+          </div>}
+
           {form.kind === "booking" && showDetails && <div className="details-drawer">
-            <div className="drawer-title"><span>Player details</span><p>Required by the venue. Payment details are never stored.</p></div>
+            <div className="drawer-title"><span>Player details</span><p>Required by the venue.</p></div>
             <div className="details-grid">
               <label>Full name<input required value={form.fullName} onChange={(e) => set({ fullName: e.target.value })} /></label>
               <label>Email<input required type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} /></label>
@@ -220,7 +253,7 @@ export default function App() {
           </div>}
 
           <div className="submit-row">
-            <div><span>Automation</span><strong>{form.kind === "probe" ? "Watch and report" : "Stop safely at payment"}</strong></div>
+            <div><span>Automation</span><strong>{form.kind === "probe" ? "Watch and report" : form.stopAt === "paid" ? "Book and pay automatically" : "Stop safely at payment"}</strong></div>
             <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : form.kind === "probe" ? "Watch this date" : "Queue this court"}<span>↗</span></button>
           </div>
         </form>
@@ -246,7 +279,10 @@ function JobCard({ job, onRun, onDelete }: { job: BookingJob; onRun: () => void;
   const date = new Date(`${job.date}T12:00:00`);
   return <article className="journey-card">
     <div className="date-stamp"><span>{date.toLocaleDateString("en-GB", { month: "short" })}</span><b>{date.getDate()}</b></div>
-    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · payment page ready` : job.error || `Starts ${fmt(job.fireAt)}`}</p></div>
+    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · ${
+      job.result.stageReached === "paid" ? `paid with card ····${job.cardLast4 || ""}` :
+      job.result.stageReached === "card" ? "card form captured" : "payment page ready"
+    }` : job.error || `Starts ${fmt(job.fireAt)}`}</p></div>
     <span className={`status ${job.status}`}><i />{job.status}</span>
     <div className="card-actions">
       {artifacts.filter((file) => file.endsWith(".png")).slice(-1).map((file) => <a key={file} href={`/api/jobs/${job.id}/artifacts/${file}`} target="_blank" rel="noreferrer">View</a>)}

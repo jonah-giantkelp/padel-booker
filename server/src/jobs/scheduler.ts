@@ -2,6 +2,7 @@ import { config } from "../config";
 import { log } from "../log";
 import { runProbeJob } from "../booking/probe";
 import { runBookingJob } from "../booking/run";
+import { decryptCard } from "./cardVault";
 import { computeFireAt } from "./schedule";
 import { JobStore } from "./store";
 import { BookingJob } from "./types";
@@ -50,11 +51,15 @@ export function startScheduler(store: JobStore): () => void {
     log(`Scheduler: firing ${job.kind} job ${job.id} (${job.date} at ${job.venue})`);
     await store.update(job.id, { status: "running", startedAt: new Date().toISOString(), error: undefined });
     try {
-      const result = job.kind === "probe" ? await runProbeJob(job) : await runBookingJob(job);
+      // Card details are decrypted only here, passed by value, never persisted.
+      const card = job.kind !== "probe" && job.cardEnc ? decryptCard(job.cardEnc) : undefined;
+      const result = job.kind === "probe" ? await runProbeJob(job) : await runBookingJob(job, card);
       await store.update(job.id, {
         status: "success",
         result,
-        finishedAt: new Date().toISOString()
+        finishedAt: new Date().toISOString(),
+        // A paid (or otherwise finished) job no longer needs the card.
+        cardEnc: undefined
       });
       log(`Scheduler: job ${job.id} succeeded`);
     } catch (err) {

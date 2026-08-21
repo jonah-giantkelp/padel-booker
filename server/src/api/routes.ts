@@ -4,12 +4,13 @@ import path from "node:path";
 import { artifactsDir, config, probeProfileDir } from "../config";
 import { parseHour } from "../booking/availability";
 import { computeFireAt } from "../jobs/schedule";
+import { cardVaultReady, encryptCard } from "../jobs/cardVault";
 import { JobStore } from "../jobs/store";
-import { BookingDetails, CourtType, JobKind, StopAt } from "../jobs/types";
+import { BookingDetails, BookingJob, CardDetails, CourtType, JobKind, StopAt } from "../jobs/types";
 import { getAvailabilityPreview } from "../booking/preview";
 
 const COURT_TYPES: CourtType[] = ["padel", "tennis"];
-const STOP_ATS: StopAt[] = ["basket", "details", "payment"];
+const STOP_ATS: StopAt[] = ["basket", "details", "payment", "card", "paid"];
 
 function badRequest(message: string): Error & { status?: number } {
   const err: Error & { status?: number } = new Error(message);
@@ -45,6 +46,51 @@ function parseDetails(body: Record<string, unknown>): BookingDetails {
   return details;
 }
 
+function luhnOk(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let n = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      n *= 2;
+      if (n > 9) n -= 9;
+    }
+    sum += n;
+  }
+  return sum % 10 === 0;
+}
+
+/** Card comes in as { number, expiry "MM/YY", cvc, name, postcode }. */
+function parseCard(body: Record<string, unknown>): CardDetails {
+  const c = (body.card || {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const number = str(c.number).replace(/[\s-]/g, "");
+  if (!/^\d{12,19}$/.test(number) || !luhnOk(number)) {
+    throw badRequest("card.number does not look like a valid card number");
+  }
+  const expiry = str(c.expiry).match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
+  if (!expiry) throw badRequest("card.expiry must be MM/YY");
+  const expMonth = Number(expiry[1]);
+  const expYear = Number(expiry[2].length === 2 ? `20${expiry[2]}` : expiry[2]);
+  if (expMonth < 1 || expMonth > 12) throw badRequest("card.expiry month must be 01-12");
+  const now = new Date();
+  if (expYear < now.getFullYear() || (expYear === now.getFullYear() && expMonth < now.getMonth() + 1)) {
+    throw badRequest("card.expiry is in the past");
+  }
+  const cvc = str(c.cvc);
+  if (!/^\d{3,4}$/.test(cvc)) throw badRequest("card.cvc must be 3 or 4 digits");
+  const name = str(c.name);
+  const postcode = str(c.postcode).toUpperCase();
+  if (!name) throw badRequest("card.name is required");
+  if (!postcode) throw badRequest("card.postcode is required");
+  return { number, expMonth, expYear, cvc, name, postcode };
+}
+
+/** Never let the encrypted card blob out through the API. */
+function publicJob(job: BookingJob): Omit<BookingJob, "cardEnc"> {
+  const { cardEnc: _cardEnc, ...rest } = job;
+  return rest;
+}
+
 export function buildRouter(store: JobStore): Router {
   const router = express.Router();
 
@@ -59,7 +105,7 @@ export function buildRouter(store: JobStore): Router {
   });
 
   router.get("/jobs", (_req, res) => {
-    res.json(store.list());
+    res.json(store.list().map(publicJob));
   });
 
   router.get("/availability", async (req, res, next) => {
@@ -121,6 +167,19 @@ export function buildRouter(store: JobStore): Router {
 
       const details = parseDetails(body);
 
+      let cardEnc: string | undefined;
+      let cardLast4: string | undefined;
+      if (stopAt === "paid") {
+        if (!cardVaultReady()) {
+          throw badRequest(
+            "Auto-pay is not enabled on this server: set CARD_ENC_KEY (openssl rand -hex 32) and restart."
+          );
+        }
+        const card = parseCard(body);
+        cardEnc = encryptCard(card);
+        cardLast4 = card.number.slice(-4);
+      }
+
       const preview = await getAvailabilityPreview(date, venue);
       if (preview.released) {
         const available = preview.slots.some((slot) =>
@@ -143,10 +202,12 @@ export function buildRouter(store: JobStore): Router {
         courtNumber,
         details,
         stopAt,
+        cardEnc,
+        cardLast4,
         fireAt: fireAt.toISOString(),
         status: "scheduled"
       });
-      res.status(201).json(job);
+      res.status(201).json(publicJob(job));
     } catch (err) {
       next(err);
     }
@@ -163,7 +224,7 @@ export function buildRouter(store: JobStore): Router {
         fireAt: new Date().toISOString(),
         error: undefined
       });
-      res.json(updated);
+      res.json(publicJob(updated));
     } catch (err) {
       next(err);
     }
