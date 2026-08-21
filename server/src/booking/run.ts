@@ -7,6 +7,7 @@ import { delay, log } from "../log";
 import {
   describeCardSurfaces,
   fillAndSubmitCard,
+  logPaymentFailure,
   openCardForm,
   settlePayment
 } from "./payment";
@@ -281,6 +282,9 @@ export async function runBookingJob(job: BookingJob, card?: CardDetails): Promis
     await saveArtifacts(page, dir, `6-${outcome}`);
     log("Payment settled", { outcome, url: page.url() });
     if (outcome === "paid") return asResult("paid", match);
+
+    // Anything else is a failure — dump full diagnostics to the shell first.
+    await logPaymentFailure(page, outcome, dir).catch(() => {});
     if (outcome === "challenge") {
       throw new Error(
         "Payment stopped at a 3DS challenge and it was not approved in time. " +

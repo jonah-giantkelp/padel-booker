@@ -53,14 +53,18 @@ export const config = {
 
   // After submitting a card, how long to wait for confirmation/3DS to resolve.
   paySettleSeconds: num(process.env.PAY_SETTLE_SECONDS, 180),
-  // How often the background refresher re-checks recently viewed availability.
-  previewRefreshSeconds: num(process.env.PREVIEW_REFRESH_SECONDS, 180),
+  // How often the refresher wakes to see if any viewed date is due its
+  // once-a-day availability re-check (the check itself is capped at 1×/day).
+  previewRefreshSeconds: num(process.env.PREVIEW_REFRESH_SECONDS, 3600),
 
   twoCaptchaApiKey: process.env.TWO_CAPTCHA_API_KEY || "",
   headless: process.env.HEADLESS !== "false",
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   authEmail: process.env.AUTH_EMAIL || "",
   authPasswordHash: process.env.AUTH_PASSWORD_HASH || "",
+  // Additional accounts beyond AUTH_EMAIL/AUTH_PASSWORD_HASH. One per line or
+  // comma-separated, each "email:saltHex:hashHex".
+  authUsers: process.env.AUTH_USERS || "",
   sessionSecret: process.env.SESSION_SECRET || ""
 };
 

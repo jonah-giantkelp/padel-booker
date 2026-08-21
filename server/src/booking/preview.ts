@@ -14,10 +14,14 @@ export interface AvailabilityPreview {
   slots: Array<{ hour: number; type: CourtType; court: string; price: string | null }>;
 }
 
-const TTL_RELEASED_MS = 90_000;
-const TTL_UNRELEASED_MS = 30_000;
-// Keep refreshing a date this long after the UI last asked about it.
-const RECENT_WINDOW_MS = 15 * 60_000;
+// Background refreshes cost a Cloudflare gate pass (potentially a 2captcha
+// solve), so the scheduled refresher re-checks a viewed date at most once a
+// day. A cached value is served however old until then; queue-time validation
+// (getAvailabilityPreview with maxAgeMs) is the only thing that forces a
+// fresher check, and that's a rare, user-initiated action.
+const DAILY_MS = 24 * 60 * 60_000;
+// A date stays eligible for the daily refresh this long after last being viewed.
+const RECENT_WINDOW_MS = 24 * 60 * 60_000;
 
 interface CacheEntry {
   checkedAtMs: number;
@@ -30,9 +34,6 @@ const lastRequested = new Map<string, number>();
 // The preview profile dir supports exactly one Chrome at a time, so all loads
 // (from requests and the refresher alike) are chained through this promise.
 let browserChain: Promise<unknown> = Promise.resolve();
-
-const ttlFor = (value: AvailabilityPreview) =>
-  value.released ? TTL_RELEASED_MS : TTL_UNRELEASED_MS;
 
 function refresh(date: string, venue: string): Promise<AvailabilityPreview> {
   const key = `${venue}:${date}`;
@@ -52,10 +53,11 @@ function refresh(date: string, venue: string): Promise<AvailabilityPreview> {
 }
 
 /**
- * Cached availability. By default a cached value is returned immediately —
- * however stale — with a background refresh kicked off past its TTL, so the
- * UI never waits on a Chrome launch. Pass maxAgeMs to insist on freshness
- * (used when queueing a job, to validate against booking races).
+ * Cached availability. A cached value is always returned immediately, however
+ * old — the UI never waits on (or pays for) a Chrome launch. Only a cache miss
+ * triggers a live check. Pass maxAgeMs to insist on freshness: used at
+ * queue time to validate against booking races, and the only path (besides the
+ * once-a-day refresher) that will spend a gate pass.
  */
 export async function getAvailabilityPreview(
   date: string,
@@ -66,20 +68,14 @@ export async function getAvailabilityPreview(
   const key = `${venue}:${date}`;
   lastRequested.set(key, Date.now());
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.checkedAtMs <= maxAgeMs) {
-    if (Date.now() - cached.checkedAtMs > ttlFor(cached.value)) {
-      void refresh(date, venue).catch((err) =>
-        log("Background availability refresh failed:", err.message)
-      );
-    }
-    return cached.value;
-  }
+  if (cached && Date.now() - cached.checkedAtMs <= maxAgeMs) return cached.value;
   return refresh(date, venue);
 }
 
 /**
- * Keep recently-viewed dates fresh on a schedule, so the calendar reflects
- * other people's bookings without a slow check on every click.
+ * Re-check recently-viewed dates on a schedule so the calendar drifts back
+ * towards reality — but at most once per day per date, since each check costs
+ * a Cloudflare gate pass / 2captcha credit.
  */
 export function startPreviewRefresher(): () => void {
   const timer = setInterval(() => {
@@ -90,14 +86,14 @@ export function startPreviewRefresher(): () => void {
         continue;
       }
       const cached = cache.get(key);
-      if (cached && now - cached.checkedAtMs <= ttlFor(cached.value)) continue;
+      if (cached && now - cached.checkedAtMs < DAILY_MS) continue;
       const [venue, date] = key.split(":");
       void refresh(date, venue).catch((err) =>
         log(`Scheduled availability refresh failed for ${key}:`, err.message)
       );
     }
   }, config.previewRefreshSeconds * 1000);
-  log(`Availability refresher started (every ${config.previewRefreshSeconds}s)`);
+  log(`Availability refresher started (checks every ${config.previewRefreshSeconds}s, refreshes each date ≤1×/day)`);
   return () => clearInterval(timer);
 }
 

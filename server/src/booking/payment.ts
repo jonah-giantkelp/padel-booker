@@ -187,6 +187,32 @@ export async function fillAndSubmitCard(page: Page, card: CardDetails): Promise<
   log("Submitted embedded Stripe card form");
 }
 
+/**
+ * Dump everything useful about a failed payment to the shell: outcome, final
+ * URL, page title, any visible error/alert text, and every frame present (so a
+ * misfired 3DS or an unrecognised Stripe surface is diagnosable from logs
+ * alone). Card data never appears here — only field presence, not values.
+ */
+export async function logPaymentFailure(
+  page: Page,
+  outcome: PaymentOutcome,
+  artifactDir: string
+): Promise<void> {
+  const snap = await takeSnapshot(page).catch(() => null);
+  const frames = page.frames().map((f) => f.url()).filter(Boolean);
+  log("──────── PAYMENT FAILED ────────");
+  log("outcome     :", outcome);
+  log("final url   :", page.url());
+  log("page title  :", snap?.title || "(unavailable)");
+  if (snap?.errorText) log("error text  :", snap.errorText);
+  if (snap?.hasChallengeFrame) log("note        : a 3DS/challenge frame was present");
+  log("frames      :");
+  for (const url of frames) log("  -", url);
+  if (snap?.text) log("page text   :", snap.text.slice(0, 1500));
+  log("artifacts   :", artifactDir, "(see 5-card-submitted, 6-" + outcome + ", error)");
+  log("────────────────────────────────");
+}
+
 export type PaymentOutcome = "paid" | "challenge" | "declined" | "pending" | "unknown";
 
 export interface PaymentSnapshot {

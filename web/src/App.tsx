@@ -1,7 +1,10 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, AppConfig, AvailabilityPreview, BookingJob, CourtType, NewJob, StopAt } from "./api";
+import { api, AppConfig, AvailabilityPreview, BookingJob, CourtType, NewJob } from "./api";
 
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 7);
+// Weeks the calendar can page through. Anything beyond the site's release
+// window simply queues a job that fires at that date's release moment.
+const WEEKS = 8;
 const hourLabel = (h: number) => (h < 12 ? `${h}:00` : h === 12 ? "12:00" : `${h - 12}:00`);
 const venueLabel = (slug: string) => slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const isoDate = (date: Date) => {
@@ -16,6 +19,14 @@ function Mark() {
   return <span className="mark" aria-hidden="true"><i /><i /><i /></span>;
 }
 
+const PLAYER_KEY = "padel-booker:player";
+type PlayerProfile = { fullName: string; email: string; mobile: string; otherTel: string; dob: string; gender: "" | "f" | "m" | "n" };
+
+function loadProfile(): Partial<PlayerProfile> {
+  try { return JSON.parse(localStorage.getItem(PLAYER_KEY) || "{}"); }
+  catch { return {}; }
+}
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [jobs, setJobs] = useState<BookingJob[]>([]);
@@ -25,35 +36,39 @@ export default function App() {
   const [showDetails, setShowDetails] = useState(false);
   const [availability, setAvailability] = useState<AvailabilityPreview | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     venue: "bethnal-green-gardens",
-    date: isoDate(new Date()),
-    hour: "19",
+    date: "",
+    hour: "",
     courtType: "padel" as CourtType,
     courtNumber: "",
-    stopAt: "payment" as StopAt,
     fullName: "",
     email: "",
     mobile: "",
     otherTel: "",
     dob: "",
     gender: "" as "" | "f" | "m" | "n",
+    ...loadProfile(),
     cardNumber: "",
     cardExpiry: "",
     cardCvc: "",
     cardName: "",
     cardPostcode: ""
-  });
+  }));
   const set = (patch: Partial<typeof form>) => setForm((current) => ({ ...current, ...patch }));
+  const profileSaved = !!(form.fullName && form.email && form.mobile && form.dob && form.gender);
+  const [weekOffset, setWeekOffset] = useState(0);
 
-  // Show two weeks: the released window plus a week beyond it — booking dates
-  // before they're released is the whole point, the job fires at release time.
-  const days = useMemo(() => Array.from({ length: (config?.bookingWindowDays ?? 7) + 8 }, (_, i) => {
+  const days = useMemo(() => Array.from({ length: WEEKS * 7 }, (_, i) => {
     const date = new Date();
     date.setHours(12, 0, 0, 0);
     date.setDate(date.getDate() + i);
     return date;
-  }), [config?.bookingWindowDays]);
+  }), []);
+  const weeks = useMemo(
+    () => Array.from({ length: WEEKS }, (_, w) => days.slice(w * 7, w * 7 + 7)),
+    [days]
+  );
 
   const refresh = useCallback(() => api.jobs().then(setJobs).catch((e) => setError(e.message)), []);
   useEffect(() => {
@@ -64,6 +79,7 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
+    if (!form.date) { setAvailability(null); setAvailabilityLoading(false); return; }
     let cancelled = false;
     setAvailabilityLoading(true);
     setAvailability(null);
@@ -77,24 +93,42 @@ export default function App() {
   const availableHours = useMemo(() => new Set(
     availability?.slots.filter((slot) => slot.type === form.courtType).map((slot) => slot.hour) || []
   ), [availability, form.courtType]);
+  // If the picked time turns out to be taken on a released day, drop the pick
+  // rather than silently choosing a different time.
   useEffect(() => {
-    if (!availability?.released || availableHours.has(Number(form.hour))) return;
-    const first = [...availableHours].sort((a, b) => a - b)[0];
-    if (first !== undefined) set({ hour: String(first) });
+    if (!form.hour || !availability?.released || availableHours.has(Number(form.hour))) return;
+    set({ hour: "" });
   }, [availability, availableHours, form.hour]);
+
+  function saveProfile() {
+    setError(null);
+    if (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender) {
+      setError("Fill in name, email, mobile, date of birth and gender to save your profile.");
+      return;
+    }
+    const profile: PlayerProfile = {
+      fullName: form.fullName, email: form.email, mobile: form.mobile,
+      otherTel: form.otherTel, dob: form.dob, gender: form.gender
+    };
+    localStorage.setItem(PLAYER_KEY, JSON.stringify(profile));
+    setShowDetails(false);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setNotice(null);
+    if (!form.date || !form.hour) {
+      setError("Pick a day and a start time first.");
+      return;
+    }
     if (!form.fullName || !form.email || !form.mobile || !form.dob || !form.gender) {
       setShowDetails(true);
       setError("Add your player details to finish setting up this booking.");
       return;
     }
-    if (form.stopAt === "paid" &&
-        (!form.cardNumber || !form.cardExpiry || !form.cardCvc || !form.cardName || !form.cardPostcode)) {
-      setError("Auto-pay needs the full card details (number, expiry, CVC, name, postcode).");
+    if (!form.cardNumber || !form.cardExpiry || !form.cardCvc || !form.cardName || !form.cardPostcode) {
+      setError("Add the card details (number, expiry, CVC, name, postcode) — bookings are paid automatically.");
       return;
     }
     setSubmitting(true);
@@ -102,20 +136,20 @@ export default function App() {
       const payload: NewJob = {
         kind: "booking", venue: form.venue, date: form.date, time: form.hour,
         courtType: form.courtType, courtNumber: form.courtNumber || undefined,
-        stopAt: form.stopAt,
+        stopAt: "paid",
         details: {
           fullName: form.fullName, email: form.email, mobile: form.mobile,
           otherTel: form.otherTel || undefined, dob: form.dob,
           gender: form.gender as "f" | "m" | "n"
         },
-        card: form.stopAt === "paid" ? {
+        card: {
           number: form.cardNumber, expiry: form.cardExpiry, cvc: form.cardCvc,
           name: form.cardName, postcode: form.cardPostcode
-        } : undefined
+        }
       };
       const created = await api.createJob(payload);
-      if (form.stopAt === "paid") set({ cardNumber: "", cardExpiry: "", cardCvc: "" });
-      setNotice(`You're set. We'll start at ${fmt(created.fireAt)} and ${form.stopAt === "paid" ? "pay automatically" : "take it to payment"}.`);
+      set({ cardNumber: "", cardExpiry: "", cardCvc: "" });
+      setNotice(`You're set. We'll start at ${fmt(created.fireAt)}, book the court and pay automatically.`);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -130,7 +164,8 @@ export default function App() {
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   }
 
-  const selectedDay = days.find((day) => isoDate(day) === form.date) || days[0];
+  const selectedDay = days.find((day) => isoDate(day) === form.date);
+  const visibleWeekStart = weeks[weekOffset][0];
 
   return (
     <div className="app-shell">
@@ -161,16 +196,29 @@ export default function App() {
           </div>
 
           <div className="calendar-block">
-            <div className="calendar-label"><span className="field-number">B</span><span>Select a day</span><strong>{selectedDay.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</strong></div>
-            <div className="week-strip">
-              {days.map((day, index) => {
-                const value = isoDate(day);
-                return <button type="button" key={value} className={form.date === value ? "selected" : ""} onClick={() => set({ date: value })}>
-                  <span>{index === 0 ? "Today" : day.toLocaleDateString("en-GB", { weekday: "short" })}</span>
-                  <b>{day.getDate()}</b>
-                  <small>{day.toLocaleDateString("en-GB", { month: "short" })}</small>
-                </button>;
-              })}
+            <div className="calendar-label">
+              <span className="field-number">B</span><span>Select a day</span>
+              <div className="week-nav">
+                <strong>{visibleWeekStart.toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</strong>
+                <button type="button" aria-label="Previous week" disabled={weekOffset === 0} onClick={() => setWeekOffset((w) => Math.max(0, w - 1))}>←</button>
+                <button type="button" aria-label="Next week" disabled={weekOffset === WEEKS - 1} onClick={() => setWeekOffset((w) => Math.min(WEEKS - 1, w + 1))}>→</button>
+              </div>
+            </div>
+            <div className="week-viewport">
+              <div className="week-track" style={{ transform: `translateX(-${weekOffset * 100}%)` }}>
+                {weeks.map((week, w) => (
+                  <div className="week-strip" key={w}>
+                    {week.map((day, d) => {
+                      const value = isoDate(day);
+                      return <button type="button" key={value} className={form.date === value ? "selected" : ""} onClick={() => set({ date: value })}>
+                        <span>{w === 0 && d === 0 ? "Today" : day.toLocaleDateString("en-GB", { weekday: "short" })}</span>
+                        <b>{day.getDate()}</b>
+                        <small>{day.toLocaleDateString("en-GB", { month: "short" })}</small>
+                      </button>;
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -191,38 +239,22 @@ export default function App() {
             <div className="photo-tile"><img src="/images/padel-racket.jpg" alt="Padel racket and ball beside the court glass" /></div>
             <div className="player-panel">
               <span className="eyebrow dark">Player profile</span>
-              <h3>{form.fullName || "Add your details once"}</h3>
-              <p>{form.email || "We use these to complete the venue checkout."}</p>
-              <button type="button" className="text-action" onClick={() => setShowDetails((open) => !open)}>{showDetails ? "Close details" : form.fullName ? "Edit details" : "Add player details"} <span>→</span></button>
+              <h3>{profileSaved ? form.fullName : "Add your details once"}</h3>
+              <p>{profileSaved ? `${form.email} · ${form.mobile}` : "We use these to complete the venue checkout."}</p>
+              <button type="button" className="text-action" onClick={() => setShowDetails((open) => !open)}>{showDetails ? "Close details" : profileSaved ? "Edit profile" : "Add player details"} <span>→</span></button>
             </div>
             <div className="booking-summary">
               <span className="eyebrow">Selected</span>
-              <strong>{selectedDay.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}</strong>
-              <b>{hourLabel(Number(form.hour))} {Number(form.hour) < 12 ? "AM" : "PM"}</b>
-              <small>{venueLabel(form.venue)}</small>
+              {selectedDay && form.hour ? <>
+                <strong>{selectedDay.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "short" })}</strong>
+                <b>{hourLabel(Number(form.hour))} {Number(form.hour) < 12 ? "AM" : "PM"}</b>
+                <small>{venueLabel(form.venue)}</small>
+              </> : <p className="summary-empty">Pick a day and a start time to see your session here.</p>}
             </div>
-          </div>
-
-          <div className="details-drawer">
-            <div className="drawer-title"><span>Payment</span><p>Choose whether we hand over at the payment page or pay for you.</p></div>
-            <div className="mode-switch" aria-label="Automation level">
-              <button type="button" className={form.stopAt !== "paid" ? "active" : ""} onClick={() => set({ stopAt: "payment" })}>Stop at payment</button>
-              <button type="button" className={form.stopAt === "paid" ? "active" : ""} onClick={() => set({ stopAt: "paid" })}>Auto-pay</button>
-            </div>
-            {form.stopAt === "paid" && <>
-              <div className="details-grid">
-                <label>Card number<input required inputMode="numeric" autoComplete="cc-number" placeholder="4242 4242 4242 4242" value={form.cardNumber} onChange={(e) => set({ cardNumber: e.target.value })} /></label>
-                <label>Expiry<input required placeholder="MM/YY" autoComplete="cc-exp" value={form.cardExpiry} onChange={(e) => set({ cardExpiry: e.target.value })} /></label>
-                <label>CVC<input required inputMode="numeric" autoComplete="cc-csc" placeholder="123" value={form.cardCvc} onChange={(e) => set({ cardCvc: e.target.value })} /></label>
-                <label>Name on card<input required autoComplete="cc-name" value={form.cardName} onChange={(e) => set({ cardName: e.target.value })} /></label>
-                <label>Billing postcode<input required autoComplete="postal-code" value={form.cardPostcode} onChange={(e) => set({ cardPostcode: e.target.value })} /></label>
-              </div>
-              <p className="card-note">Encrypted at rest, used once for this booking, deleted after it succeeds. If the bank demands a 3DS check the job fails with the challenge screenshotted — a purchase on this card earlier the same evening makes that much less likely.</p>
-            </>}
           </div>
 
           {showDetails && <div className="details-drawer">
-            <div className="drawer-title"><span>Player details</span><p>Required by the venue.</p></div>
+            <div className="drawer-title"><span>Player details</span><p>Required by the venue. Saved on this device so you only enter them once.</p></div>
             <div className="details-grid">
               <label>Full name<input required value={form.fullName} onChange={(e) => set({ fullName: e.target.value })} /></label>
               <label>Email<input required type="email" value={form.email} onChange={(e) => set({ email: e.target.value })} /></label>
@@ -231,10 +263,23 @@ export default function App() {
               <label>Gender<select required value={form.gender} onChange={(e) => set({ gender: e.target.value as typeof form.gender })}><option value="" disabled>Select…</option><option value="f">Female</option><option value="m">Male</option><option value="n">Prefer not to say</option></select></label>
               <label>Other phone <small>optional</small><input type="tel" value={form.otherTel} onChange={(e) => set({ otherTel: e.target.value })} /></label>
             </div>
+            <button type="button" className="drawer-save" onClick={saveProfile}>Save profile</button>
           </div>}
 
+          <div className="details-drawer">
+            <div className="drawer-title"><span>Payment</span><p>The booking is paid for you the moment it's secured.</p></div>
+            <div className="details-grid">
+              <label>Card number<input required inputMode="numeric" autoComplete="cc-number" placeholder="4242 4242 4242 4242" value={form.cardNumber} onChange={(e) => set({ cardNumber: e.target.value })} /></label>
+              <label>Expiry<input required placeholder="MM/YY" autoComplete="cc-exp" value={form.cardExpiry} onChange={(e) => set({ cardExpiry: e.target.value })} /></label>
+              <label>CVC<input required inputMode="numeric" autoComplete="cc-csc" placeholder="123" value={form.cardCvc} onChange={(e) => set({ cardCvc: e.target.value })} /></label>
+              <label>Name on card<input required autoComplete="cc-name" value={form.cardName} onChange={(e) => set({ cardName: e.target.value })} /></label>
+              <label>Billing postcode<input required autoComplete="postal-code" value={form.cardPostcode} onChange={(e) => set({ cardPostcode: e.target.value })} /></label>
+            </div>
+            <p className="card-note">Encrypted at rest, used once for this booking, deleted after it succeeds. If the bank demands a 3DS check the job fails with the challenge screenshotted — a purchase on this card earlier the same evening makes that much less likely.</p>
+          </div>
+
           <div className="submit-row">
-            <div><span>Automation</span><strong>{form.stopAt === "paid" ? "Book and pay automatically" : "Stop safely at payment"}</strong></div>
+            <div><span>Automation</span><strong>Book and pay automatically</strong></div>
             <button className="primary-cta" type="submit" disabled={submitting}>{submitting ? "Setting up…" : "Queue this court"}<span>↗</span></button>
           </div>
         </form>

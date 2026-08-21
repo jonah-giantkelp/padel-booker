@@ -6,6 +6,27 @@ const COOKIE = "padel_session";
 const SESSION_SECONDS = 7 * 24 * 60 * 60;
 const attempts = new Map<string, { count: number; resetAt: number }>();
 
+/** All accounts: the single AUTH_EMAIL pair plus any AUTH_USERS entries. */
+function users(): Array<{ email: string; hash: string }> {
+  const list: Array<{ email: string; hash: string }> = [];
+  if (config.authEmail && config.authPasswordHash) {
+    list.push({ email: config.authEmail.toLowerCase(), hash: config.authPasswordHash });
+  }
+  for (const line of config.authUsers.split(/[\n,]/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const first = trimmed.indexOf(":");
+    const email = trimmed.slice(0, first).trim().toLowerCase();
+    const hash = trimmed.slice(first + 1).trim();
+    if (email && hash) list.push({ email, hash });
+  }
+  return list;
+}
+
+function isKnownEmail(email: string): boolean {
+  return users().some((u) => u.email === email);
+}
+
 function readCookie(req: Request): string | undefined {
   for (const part of (req.headers.cookie || "").split(";")) {
     const [name, ...value] = part.trim().split("=");
@@ -18,8 +39,8 @@ function sign(value: string): string {
   return crypto.createHmac("sha256", config.sessionSecret).update(value).digest("base64url");
 }
 
-function createSession(): string {
-  const payload = Buffer.from(JSON.stringify({ email: config.authEmail, exp: Date.now() + SESSION_SECONDS * 1000 })).toString("base64url");
+function createSession(email: string): string {
+  const payload = Buffer.from(JSON.stringify({ email, exp: Date.now() + SESSION_SECONDS * 1000 })).toString("base64url");
   return `${payload}.${sign(payload)}`;
 }
 
@@ -34,12 +55,14 @@ function authenticated(req: Request): boolean {
   if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return false;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data.email === config.authEmail && Number(data.exp) > Date.now();
+    return isKnownEmail(String(data.email).toLowerCase()) && Number(data.exp) > Date.now();
   } catch { return false; }
 }
 
-function passwordMatches(password: string): boolean {
-  const [saltHex, hashHex] = config.authPasswordHash.split(":");
+function passwordMatches(email: string, password: string): boolean {
+  const user = users().find((u) => u.email === email);
+  if (!user) return false;
+  const [saltHex, hashHex] = user.hash.split(":");
   if (!saltHex || !hashHex) return false;
   try {
     const expected = Buffer.from(hashHex, "hex");
@@ -51,8 +74,10 @@ function passwordMatches(password: string): boolean {
 const cookieFlags = () => `Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_SECONDS}${config.nodeEnv === "production" ? "; Secure" : ""}`;
 
 export function assertAuthConfigured(): void {
-  if (!config.authEmail || !config.authPasswordHash || !config.sessionSecret) {
-    throw new Error("AUTH_EMAIL, AUTH_PASSWORD_HASH and SESSION_SECRET must be configured");
+  if (!config.sessionSecret || users().length === 0) {
+    throw new Error(
+      "SESSION_SECRET plus at least one account (AUTH_EMAIL/AUTH_PASSWORD_HASH or AUTH_USERS) must be configured"
+    );
   }
 }
 
@@ -67,14 +92,14 @@ export function authRouter(): Router {
     if (attempt && attempt.resetAt <= now) attempts.delete(key);
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     const password = typeof req.body?.password === "string" ? req.body.password : "";
-    if (email !== config.authEmail.toLowerCase() || !passwordMatches(password)) {
+    if (!passwordMatches(email, password)) {
       const next = attempts.get(key) || { count: 0, resetAt: now + 15 * 60 * 1000 };
       next.count += 1;
       attempts.set(key, next);
       return res.status(401).json({ error: "Invalid email or password" });
     }
     attempts.delete(key);
-    res.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(createSession())}; ${cookieFlags()}`);
+    res.setHeader("Set-Cookie", `${COOKIE}=${encodeURIComponent(createSession(email))}; ${cookieFlags()}`);
     return res.json({ authenticated: true });
   });
   router.post("/logout", (_req, res) => {
