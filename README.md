@@ -115,15 +115,16 @@ The repo is Railway-ready: `railway.json` points at the `Dockerfile`
 
 1. Push this repo to GitHub; in Railway create a project → **Deploy from
    GitHub repo**. Every push to the default branch deploys.
-2. **Variables**: set `TWO_CAPTCHA_API_KEY` (and `RELEASE_TIME` once known).
+2. **Variables**: set `TWO_CAPTCHA_API_KEY`, `AUTH_EMAIL`,
+   `AUTH_PASSWORD_HASH`, and `SESSION_SECRET` (plus `RELEASE_TIME` once known).
 3. **Volume**: attach one mounted at `/app/data` — it holds the job queue,
    Chrome profile and artifacts; without it every deploy wipes the queue.
 4. Generate a domain (Settings → Networking). Railway injects `PORT`
    automatically.
 
-Note: the app has no auth — anyone with the URL can queue bookings with your
-2captcha credit. Keep the URL private or put Railway's private networking /
-an access layer in front.
+The app is protected by its own signed-cookie login. Keep Railway at one
+replica: its file-backed queue and persistent Chrome profiles are intentionally
+single-instance resources.
 
 ## Environment
 
