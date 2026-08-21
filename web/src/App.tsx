@@ -27,6 +27,30 @@ function loadProfile(): Partial<PlayerProfile> {
   catch { return {}; }
 }
 
+/** Turn an internal job error into something a person can act on. */
+function friendlyFailure(error?: string): { headline: string; detail: string } {
+  const e = (error || "").toLowerCase();
+  if (e.includes("declined")) {
+    return { headline: "Card was declined", detail: "The booking wasn't taken. Try again with a different card." };
+  }
+  if (e.includes("3ds") || e.includes("challenge") || e.includes("verification") || e.includes("2fa") || e.includes("authenticat")) {
+    return { headline: "Your bank asked to verify the payment", detail: "We can't complete that overnight. The court may still be held in the basket — open it and pay manually if you're quick." };
+  }
+  if (e.includes("no confirmation") || e.includes("may have charged") || e.includes("may have been charged")) {
+    return { headline: "Couldn't confirm the payment", detail: "It may or may not have gone through — check your bank and email before retrying so you don't pay twice." };
+  }
+  if (e.includes("no available slot") || e.includes("not bookable") || e.includes("no such court")) {
+    return { headline: "The slot was gone", detail: "It was taken (or never opened) by the time booking started. Try another time or court." };
+  }
+  if (e.includes("rejected the customer details") || e.includes("not recognisably a payment")) {
+    return { headline: "The venue didn't accept the booking", detail: "Something on the checkout didn't go through. Open the screenshot to see what it showed." };
+  }
+  if (e.includes("already queued")) {
+    return { headline: "Already queued", detail: error || "" };
+  }
+  return { headline: "Booking didn't complete", detail: "Open the screenshot to see exactly what the venue showed, then retry." };
+}
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [jobs, setJobs] = useState<BookingJob[]>([]);
@@ -309,13 +333,21 @@ function JobCard({ job, onRun, onDelete }: { job: BookingJob; onRun: () => void;
     if (job.status === "success" || job.status === "failed") api.artifacts(job.id).then(setArtifacts).catch(() => {});
   }, [job.id, job.status]);
   const date = new Date(`${job.date}T12:00:00`);
+  const failure = job.status === "failed" ? friendlyFailure(job.error) : null;
+  const statusLabel = job.status === "success"
+    ? (job.result?.kind === "booking" && job.result.stageReached === "paid" ? "booked" : job.status)
+    : job.status === "failed" ? "needs attention" : job.status;
   return <article className="journey-card">
     <div className="date-stamp"><span>{date.toLocaleDateString("en-GB", { month: "short" })}</span><b>{date.getDate()}</b></div>
-    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}{job.ownerName ? ` · ${job.ownerName}` : ""}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3><p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · ${
-      job.result.stageReached === "paid" ? `paid with card ····${job.cardLast4 || ""}` :
-      job.result.stageReached === "card" ? "card form captured" : "payment page ready"
-    }` : job.error || `Starts ${fmt(job.fireAt)}`}</p></div>
-    <span className={`status ${job.status}`}><i />{job.status}</span>
+    <div className="journey-main"><span className="eyebrow dark">{job.kind === "probe" ? "Release watch" : venueLabel(job.venue)}{job.ownerName ? ` · ${job.ownerName}` : ""}</span><h3>{job.kind === "probe" ? "Watching for courts" : `${job.courtType} · ${hourLabel(job.hour ?? 0)}`}</h3>{
+      failure
+        ? <p className="fail-line"><strong>{failure.headline}.</strong> {failure.detail}</p>
+        : <p>{job.result?.kind === "booking" ? `${job.result.court} · ${job.result.price || ""} · ${
+            job.result.stageReached === "paid" ? `booked & paid with card ····${job.cardLast4 || ""}` :
+            job.result.stageReached === "card" ? "card form captured" : "payment page ready"
+          }` : `Starts ${fmt(job.fireAt)}`}</p>
+    }</div>
+    <span className={`status ${job.status}`}><i />{statusLabel}</span>
     <div className="card-actions">
       {artifacts.filter((file) => file.endsWith(".png")).slice(-1).map((file) => <a key={file} href={`/api/jobs/${job.id}/artifacts/${file}`} target="_blank" rel="noreferrer">View</a>)}
       {job.status !== "running" && <button type="button" onClick={onRun}>{job.status === "failed" ? "Retry" : "Run now"}</button>}
